@@ -17,8 +17,8 @@
  */
 package org.apache.beam.sdk.io.elasticsearch;
 
-import static org.apache.beam.vendor.guava.v26_0_jre.com.google.common.base.Preconditions.checkArgument;
-import static org.apache.beam.vendor.guava.v26_0_jre.com.google.common.base.Preconditions.checkState;
+import static com.google.common.base.Preconditions.checkArgument;
+import static com.google.common.base.Preconditions.checkState;
 
 import com.fasterxml.jackson.core.JsonGenerator;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -27,11 +27,8 @@ import com.fasterxml.jackson.databind.SerializerProvider;
 import com.fasterxml.jackson.databind.module.SimpleModule;
 import com.fasterxml.jackson.databind.ser.std.StdSerializer;
 import com.google.auto.value.AutoValue;
-import java.io.File;
-import java.io.FileInputStream;
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.Serializable;
+import com.google.common.annotations.VisibleForTesting;
+import java.io.*;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.security.KeyStore;
@@ -39,11 +36,15 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.ListIterator;
 import java.util.Map;
 import java.util.NoSuchElementException;
+import java.util.Objects;
+import java.util.Set;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.function.Predicate;
 import javax.annotation.Nonnull;
 import javax.net.ssl.SSLContext;
@@ -54,19 +55,17 @@ import org.apache.beam.sdk.coders.StringUtf8Coder;
 import org.apache.beam.sdk.io.BoundedSource;
 import org.apache.beam.sdk.options.PipelineOptions;
 import org.apache.beam.sdk.options.ValueProvider;
-import org.apache.beam.sdk.transforms.DoFn;
-import org.apache.beam.sdk.transforms.PTransform;
-import org.apache.beam.sdk.transforms.ParDo;
-import org.apache.beam.sdk.transforms.SerializableFunction;
+import org.apache.beam.sdk.transforms.*;
 import org.apache.beam.sdk.transforms.display.DisplayData;
 import org.apache.beam.sdk.util.BackOff;
 import org.apache.beam.sdk.util.BackOffUtils;
 import org.apache.beam.sdk.util.FluentBackoff;
 import org.apache.beam.sdk.util.Sleeper;
+import org.apache.beam.sdk.values.KV;
 import org.apache.beam.sdk.values.PBegin;
 import org.apache.beam.sdk.values.PCollection;
 import org.apache.beam.sdk.values.PDone;
-import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.annotations.VisibleForTesting;
+import org.apache.commons.lang3.StringUtils;
 import org.apache.http.HttpEntity;
 import org.apache.http.HttpHost;
 import org.apache.http.auth.AuthScope;
@@ -158,10 +157,16 @@ import org.slf4j.LoggerFactory;
 })
 public class ElasticsearchIO {
 
+  private static final List<Integer> VALID_CLUSTER_VERSIONS = Arrays.asList(2, 5, 6, 7);
+  private static final List<String> VERSION_TYPES =
+      Arrays.asList("internal", "external", "external_gt", "external_gte");
+  private static final String VERSION_CONFLICT_ERROR = "version_conflict_engine_exception";
+
   private static final Logger LOG = LoggerFactory.getLogger(ElasticsearchIO.class);
 
   public static Read read() {
-    // default scrollKeepalive = 5m as a majorant for un-predictable time between 2 start/read calls
+    // default scrollKeepalive = 5m as a majorant for un-predictable time between 2 start/read
+    // calls
     // default batchSize to 100 as recommended by ES dev team as a safe value when dealing
     // with big documents and still a good compromise for performances
     return new AutoValue_ElasticsearchIO_Read.Builder()
@@ -171,13 +176,27 @@ public class ElasticsearchIO {
         .build();
   }
 
-  public static Write write() {
-    return new AutoValue_ElasticsearchIO_Write.Builder()
+  public static DocToBulk docToBulk() {
+    return new AutoValue_ElasticsearchIO_DocToBulk.Builder()
+        .setUsePartialUpdate(false) // default is document upsert
+        .build();
+  }
+
+  public static BulkIO bulkIO() {
+    return new AutoValue_ElasticsearchIO_BulkIO.Builder()
         // advised default starting batch size in ES docs
         .setMaxBatchSize(1000L)
         // advised default starting batch size in ES docs
         .setMaxBatchSizeBytes(5L * 1024L * 1024L)
-        .setUsePartialUpdate(false) // default is document upsert
+        .setUseStatefulBatches(false)
+        .setMaxParallelRequestsPerWindow(1)
+        .build();
+  }
+
+  public static Write write() {
+    return new AutoValue_ElasticsearchIO_Write.Builder()
+        .setDocToBulk(docToBulk())
+        .setBulkIO(bulkIO())
         .build();
   }
 
@@ -190,44 +209,48 @@ public class ElasticsearchIO {
     return mapper.readValue(responseEntity.getContent(), JsonNode.class);
   }
 
-  static void checkForErrors(HttpEntity responseEntity, int backendVersion, boolean partialUpdate)
+  static void checkForErrors(HttpEntity responseEntity, Set<String> allowedErrorTypes)
       throws IOException {
+
     JsonNode searchResult = parseResponse(responseEntity);
     boolean errors = searchResult.path("errors").asBoolean();
     if (errors) {
+      int numErrors = 0;
+
       StringBuilder errorMessages =
           new StringBuilder("Error writing to Elasticsearch, some elements could not be inserted:");
       JsonNode items = searchResult.path("items");
+      if (items.isMissingNode() || items.size() == 0) {
+        errorMessages.append(searchResult.toString());
+      }
       // some items present in bulk might have errors, concatenate error messages
       for (JsonNode item : items) {
+        JsonNode error = item.findValue("error");
+        if (error == null) {
+          continue;
+        }
 
-        String errorRootName = "";
-        // when use partial update, the response items includes all the update.
-        if (partialUpdate) {
-          errorRootName = "update";
-        } else {
-          if (backendVersion == 2) {
-            errorRootName = "create";
-          } else if (backendVersion >= 5) {
-            errorRootName = "index";
-          }
+        String type = error.path("type").asText();
+        if (allowedErrorTypes != null && allowedErrorTypes.contains(type)) {
+          continue;
         }
-        JsonNode errorRoot = item.path(errorRootName);
-        JsonNode error = errorRoot.get("error");
-        if (error != null) {
-          String type = error.path("type").asText();
-          String reason = error.path("reason").asText();
-          String docId = errorRoot.path("_id").asText();
-          errorMessages.append(String.format("%nDocument id %s: %s (%s)", docId, reason, type));
-          JsonNode causedBy = error.get("caused_by");
-          if (causedBy != null) {
-            String cbReason = causedBy.path("reason").asText();
-            String cbType = causedBy.path("type").asText();
-            errorMessages.append(String.format("%nCaused by: %s (%s)", cbReason, cbType));
-          }
+
+        // 'error' field is not null, and the error is not being ignored.
+        numErrors++;
+
+        String reason = error.path("reason").asText();
+        String docId = item.findValue("_id").asText();
+        errorMessages.append(String.format("%nDocument id %s: %s (%s)", docId, reason, type));
+
+        JsonNode causedBy = error.get("caused_by");
+        if (causedBy == null) {
+          continue;
         }
+        String cbReason = causedBy.path("reason").asText();
+        String cbType = causedBy.path("type").asText();
+        errorMessages.append(String.format("%nCaused by: %s (%s)", cbReason, cbType));
       }
-      throw new IOException(errorMessages.toString());
+      if (numErrors > 0) throw new IOException(errorMessages.toString());
     }
   }
 
@@ -1030,37 +1053,45 @@ public class ElasticsearchIO {
     }
   }
 
-  /** A {@link PTransform} writing data to Elasticsearch. */
+  /** A {@link PTransform} converting docs to their Bulk API counterparts. */
   @AutoValue
-  public abstract static class Write extends PTransform<PCollection<String>, PDone> {
+  public abstract static class DocToBulk
+      extends PTransform<PCollection<String>, PCollection<String>> {
 
-    /**
-     * Interface allowing a specific field value to be returned from a parsed JSON document. This is
-     * used for using explicit document ids, and for dynamic routing (index/Type) on a document
-     * basis. A null response will result in default behaviour and an exception will be propagated
-     * as a failure.
-     */
-    public interface FieldValueExtractFn extends SerializableFunction<JsonNode, String> {}
+    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+    private static final int DEFAULT_RETRY_ON_CONFLICT = 5; // race conditions on updates
+
+    static {
+      SimpleModule module = new SimpleModule();
+      module.addSerializer(DocumentMetadata.class, new DocumentMetadataSerializer());
+      OBJECT_MAPPER.registerModule(module);
+    }
 
     public interface BooleanFieldValueExtractFn extends SerializableFunction<JsonNode, Boolean> {}
 
     abstract @Nullable ConnectionConfiguration getConnectionConfiguration();
 
-    abstract long getMaxBatchSize();
+    abstract @Nullable Write.FieldValueExtractFn getIdFn();
 
-    abstract long getMaxBatchSizeBytes();
+    abstract @Nullable Write.FieldValueExtractFn getIndexFn();
 
-    abstract @Nullable FieldValueExtractFn getIdFn();
+    abstract @Nullable Write.FieldValueExtractFn getRoutingFn();
 
-    abstract @Nullable FieldValueExtractFn getIndexFn();
+    abstract @Nullable Write.FieldValueExtractFn getTypeFn();
 
-    abstract @Nullable FieldValueExtractFn getTypeFn();
+    abstract @Nullable Write.FieldValueExtractFn getDocVersionFn();
 
     abstract @Nullable RetryConfiguration getRetryConfiguration();
 
-    abstract boolean getUsePartialUpdate();
+    abstract @Nullable String getDocVersionType();
 
-    abstract @Nullable BooleanFieldValueExtractFn getIsDeleteFn();
+    abstract @Nullable String getUpsertScript();
+
+    abstract @Nullable Boolean getUsePartialUpdate();
+
+    abstract @Nullable Write.BooleanFieldValueExtractFn getIsDeleteFn();
+
+    abstract @Nullable Integer getBackendVersion();
 
     abstract Builder builder();
 
@@ -1068,66 +1099,39 @@ public class ElasticsearchIO {
     abstract static class Builder {
       abstract Builder setConnectionConfiguration(ConnectionConfiguration connectionConfiguration);
 
-      abstract Builder setMaxBatchSize(long maxBatchSize);
+      abstract Builder setIdFn(Write.FieldValueExtractFn idFunction);
 
-      abstract Builder setMaxBatchSizeBytes(long maxBatchSizeBytes);
+      abstract Builder setIndexFn(Write.FieldValueExtractFn indexFn);
 
-      abstract Builder setIdFn(FieldValueExtractFn idFunction);
+      abstract Builder setRoutingFn(Write.FieldValueExtractFn routingFunction);
 
-      abstract Builder setIndexFn(FieldValueExtractFn indexFn);
+      abstract Builder setTypeFn(Write.FieldValueExtractFn typeFn);
 
-      abstract Builder setTypeFn(FieldValueExtractFn typeFn);
+      abstract Builder setDocVersionFn(Write.FieldValueExtractFn docVersionFn);
 
-      abstract Builder setUsePartialUpdate(boolean usePartialUpdate);
+      abstract Builder setDocVersionType(String docVersionType);
 
-      abstract Builder setRetryConfiguration(RetryConfiguration retryConfiguration);
+      abstract Builder setIsDeleteFn(Write.BooleanFieldValueExtractFn isDeleteFn);
 
-      abstract Builder setIsDeleteFn(BooleanFieldValueExtractFn isDeleteFn);
+      abstract Builder setUsePartialUpdate(Boolean usePartialUpdate);
 
-      abstract Write build();
+      abstract Builder setUpsertScript(String source);
+
+      abstract Builder setBackendVersion(Integer assumedBackendVersion);
+
+      abstract DocToBulk build();
     }
 
     /**
-     * Provide the Elasticsearch connection configuration object.
+     * Provide the Elasticsearch connection configuration object. Only required if
+     * withBackendVersion was not used i.e. getBackendVersion() returns null.
      *
      * @param connectionConfiguration the Elasticsearch {@link ConnectionConfiguration} object
-     * @return the {@link Write} with connection configuration set
+     * @return the {@link DocToBulk} with connection configuration set
      */
-    public Write withConnectionConfiguration(ConnectionConfiguration connectionConfiguration) {
+    public DocToBulk withConnectionConfiguration(ConnectionConfiguration connectionConfiguration) {
       checkArgument(connectionConfiguration != null, "connectionConfiguration can not be null");
       return builder().setConnectionConfiguration(connectionConfiguration).build();
-    }
-
-    /**
-     * Provide a maximum size in number of documents for the batch see bulk API
-     * (https://www.elastic.co/guide/en/elasticsearch/reference/2.4/docs-bulk.html). Default is 1000
-     * docs (like Elasticsearch bulk size advice). See
-     * https://www.elastic.co/guide/en/elasticsearch/guide/current/bulk.html Depending on the
-     * execution engine, size of bundles may vary, this sets the maximum size. Change this if you
-     * need to have smaller Elasticsearch bulks.
-     *
-     * @param batchSize maximum batch size in number of documents
-     * @return the {@link Write} with connection batch size set
-     */
-    public Write withMaxBatchSize(long batchSize) {
-      checkArgument(batchSize > 0, "batchSize must be > 0, but was %s", batchSize);
-      return builder().setMaxBatchSize(batchSize).build();
-    }
-
-    /**
-     * Provide a maximum size in bytes for the batch see bulk API
-     * (https://www.elastic.co/guide/en/elasticsearch/reference/2.4/docs-bulk.html). Default is 5MB
-     * (like Elasticsearch bulk size advice). See
-     * https://www.elastic.co/guide/en/elasticsearch/guide/current/bulk.html Depending on the
-     * execution engine, size of bundles may vary, this sets the maximum size. Change this if you
-     * need to have smaller Elasticsearch bulks.
-     *
-     * @param batchSizeBytes maximum batch size in bytes
-     * @return the {@link Write} with connection batch size in bytes set
-     */
-    public Write withMaxBatchSizeBytes(long batchSizeBytes) {
-      checkArgument(batchSizeBytes > 0, "batchSizeBytes must be > 0, but was %s", batchSizeBytes);
-      return builder().setMaxBatchSizeBytes(batchSizeBytes).build();
     }
 
     /**
@@ -1136,9 +1140,9 @@ public class ElasticsearchIO {
      * exception propagated.
      *
      * @param idFn to extract the document ID
-     * @return the {@link Write} with the function set
+     * @return the {@link DocToBulk} with the function set
      */
-    public Write withIdFn(FieldValueExtractFn idFn) {
+    public DocToBulk withIdFn(Write.FieldValueExtractFn idFn) {
       checkArgument(idFn != null, "idFn must not be null");
       return builder().setIdFn(idFn).build();
     }
@@ -1149,11 +1153,24 @@ public class ElasticsearchIO {
      * exception propagated.
      *
      * @param indexFn to extract the destination index from
-     * @return the {@link Write} with the function set
+     * @return the {@link DocToBulk} with the function set
      */
-    public Write withIndexFn(FieldValueExtractFn indexFn) {
+    public DocToBulk withIndexFn(Write.FieldValueExtractFn indexFn) {
       checkArgument(indexFn != null, "indexFn must not be null");
       return builder().setIndexFn(indexFn).build();
+    }
+
+    /**
+     * Provide a function to extract the target routing from the document allowing for dynamic
+     * document routing. Should the function throw an Exception then the batch will fail and the
+     * exception propagated.
+     *
+     * @param routingFn to extract the destination index from
+     * @return the {@link DocToBulk} with the function set
+     */
+    public DocToBulk withRoutingFn(Write.FieldValueExtractFn routingFn) {
+      checkArgument(routingFn != null, "routingFn must not be null");
+      return builder().setRoutingFn(routingFn).build();
     }
 
     /**
@@ -1165,9 +1182,9 @@ public class ElasticsearchIO {
      * discussed in this blog</a>.
      *
      * @param typeFn to extract the destination index from
-     * @return the {@link Write} with the function set
+     * @return the {@link DocToBulk} with the function set
      */
-    public Write withTypeFn(FieldValueExtractFn typeFn) {
+    public DocToBulk withTypeFn(Write.FieldValueExtractFn typeFn) {
       checkArgument(typeFn != null, "typeFn must not be null");
       return builder().setTypeFn(typeFn).build();
     }
@@ -1177,10 +1194,524 @@ public class ElasticsearchIO {
      * Elasticsearch.
      *
      * @param usePartialUpdate set to true to issue partial updates
-     * @return the {@link Write} with the partial update control set
+     * @return the {@link DocToBulk} with the partial update control set
      */
-    public Write withUsePartialUpdate(boolean usePartialUpdate) {
+    public DocToBulk withUsePartialUpdate(boolean usePartialUpdate) {
       return builder().setUsePartialUpdate(usePartialUpdate).build();
+    }
+
+    /**
+     * Whether to use scripted updates and what script to use.
+     *
+     * @param source set to the value of the script source, painless lang
+     * @return the {@link DocToBulk} with the scripted updates set
+     */
+    public DocToBulk withUpsertScript(String source) {
+      return builder().setUsePartialUpdate(false).setUpsertScript(source).build();
+    }
+
+    /**
+     * Provide a function to extract the doc version from the document. This version number will be
+     * used as the document version in Elasticsearch. Should the function throw an Exception then
+     * the batch will fail and the exception propagated. Incompatible with update operations and
+     * should only be used with withUsePartialUpdate(false)
+     *
+     * @param docVersionFn to extract the document version
+     * @return the {@link DocToBulk} with the function set
+     */
+    public DocToBulk withDocVersionFn(Write.FieldValueExtractFn docVersionFn) {
+      checkArgument(docVersionFn != null, "docVersionFn must not be null");
+      return builder().setDocVersionFn(docVersionFn).build();
+    }
+
+    /**
+     * Provide a function to extract the target operation either upsert or delete from the document
+     * fields allowing dynamic bulk operation decision. While using withIsDeleteFn, it should be
+     * taken care that the document's id extraction is defined using the withIdFn function or else
+     * IllegalArgumentException is thrown. Should the function throw an Exception then the batch
+     * will fail and the exception propagated.
+     *
+     * @param isDeleteFn set to true for deleting the specific document
+     * @return the {@link Write} with the function set
+     */
+    public DocToBulk withIsDeleteFn(Write.BooleanFieldValueExtractFn isDeleteFn) {
+      checkArgument(isDeleteFn != null, "deleteFn is required");
+      return builder().setIsDeleteFn(isDeleteFn).build();
+    }
+
+    /**
+     * Provide a function to extract the doc version from the document. This version number will be
+     * used as the document version in Elasticsearch. Should the function throw an Exception then
+     * the batch will fail and the exception propagated. Incompatible with update operations and
+     * should only be used with withUsePartialUpdate(false)
+     *
+     * @param docVersionType the version type to use, one of {@value #VERSION_TYPES}
+     * @return the {@link DocToBulk} with the doc version type set
+     */
+    public DocToBulk withDocVersionType(String docVersionType) {
+      checkArgument(
+          VERSION_TYPES.contains(docVersionType),
+          "docVersionType must be one of " + "%s",
+          StringUtils.join(VERSION_TYPES));
+      return builder().setDocVersionType(docVersionType).build();
+    }
+
+    /**
+     * Use to set explicitly which version of Elasticsearch the destination cluster is running.
+     * Providing this hint means there is no need for setting {@link
+     * DocToBulk#withConnectionConfiguration}. This can also be very useful for testing purposes.
+     *
+     * @param backendVersion the major version number of the version of Elasticsearch being run in
+     *     the cluster where documents will be indexed.
+     * @return the {@link DocToBulk} with the Elasticsearch major version number set
+     */
+    public DocToBulk withBackendVersion(int backendVersion) {
+      checkArgument(
+          VALID_CLUSTER_VERSIONS.contains(backendVersion),
+          "Backend version may only be one of " + "%s",
+          StringUtils.join(VALID_CLUSTER_VERSIONS));
+      return builder().setBackendVersion(backendVersion).build();
+    }
+
+    @Override
+    public PCollection<String> expand(PCollection<String> docs) {
+      ConnectionConfiguration connectionConfiguration = getConnectionConfiguration();
+      Integer backendVersion = getBackendVersion();
+      Write.FieldValueExtractFn idFn = getIdFn();
+      Write.BooleanFieldValueExtractFn isDeleteFn = getIsDeleteFn();
+      checkState(
+          (backendVersion != null || connectionConfiguration != null),
+          "withBackendVersion() or withConnectionConfiguration() is required");
+      checkArgument(
+          isDeleteFn == null || idFn != null,
+          "Id needs to be specified by withIdFn for delete operation");
+
+      return docs.apply(ParDo.of(new DocToBulkFn(this)));
+    }
+
+    // Encapsulates the elements which form the metadata for an Elasticsearch bulk operation
+    private static class DocumentMetadata implements Serializable {
+      final String index;
+      final String type;
+      final String id;
+      final Integer retryOnConflict;
+      final String routing;
+      final Integer backendVersion;
+      final String version;
+      final String versionType;
+
+      DocumentMetadata(
+          String index,
+          String type,
+          String id,
+          Integer retryOnConflict,
+          String routing,
+          Integer backendVersion,
+          String version,
+          String versionType) {
+        this.index = index;
+        this.id = id;
+        this.type = type;
+        this.retryOnConflict = retryOnConflict;
+        this.routing = routing;
+        this.backendVersion = backendVersion;
+        this.version = version;
+        this.versionType = versionType;
+      }
+    }
+
+    private static class DocumentMetadataSerializer extends StdSerializer<DocumentMetadata> {
+      private DocumentMetadataSerializer() {
+        super(DocumentMetadata.class);
+      }
+
+      @Override
+      public void serialize(DocumentMetadata value, JsonGenerator gen, SerializerProvider provider)
+          throws IOException {
+        gen.writeStartObject();
+        if (value.index != null) {
+          gen.writeStringField("_index", value.index);
+        }
+        if (value.type != null) {
+          gen.writeStringField("_type", value.type);
+        }
+        if (value.id != null) {
+          gen.writeStringField("_id", value.id);
+        }
+        if (value.routing != null) {
+          gen.writeStringField("routing", value.routing);
+        }
+        if (value.retryOnConflict != null
+            && (value.backendVersion == 2 || value.backendVersion == 5)) {
+          gen.writeNumberField("_retry_on_conflict", value.retryOnConflict);
+        }
+        if (value.retryOnConflict != null
+            && (value.backendVersion == 6 || value.backendVersion == 7)) {
+          gen.writeNumberField("retry_on_conflict", value.retryOnConflict);
+        }
+        if (value.version != null) {
+          gen.writeStringField("version", value.version);
+        }
+        if (value.versionType != null) {
+          gen.writeStringField("version_type", value.versionType);
+        }
+        gen.writeEndObject();
+      }
+    }
+
+    @VisibleForTesting
+    static String createBulkApiEntity(DocToBulk spec, String document, int backendVersion)
+        throws IOException {
+      String documentMetadata = "{}";
+      boolean isDelete = false;
+      if (spec.getIndexFn() != null || spec.getTypeFn() != null || spec.getIdFn() != null) {
+        // parse once and reused for efficiency
+        JsonNode parsedDocument = OBJECT_MAPPER.readTree(document);
+        documentMetadata = getDocumentMetadata(spec, parsedDocument, backendVersion);
+        if (spec.getIsDeleteFn() != null) {
+          isDelete = spec.getIsDeleteFn().apply(parsedDocument);
+        }
+      }
+
+      if (isDelete) {
+        // delete request used for deleting a document
+        return String.format("{ \"delete\" : %s }%n", documentMetadata);
+      } else {
+        // index is an insert/upsert and update is a partial update (or insert if not
+        // existing)
+        if (spec.getUsePartialUpdate()) {
+          return String.format(
+              "{ \"update\" : %s }%n{ \"doc\" : %s, " + "\"doc_as_upsert\" : true }%n",
+              documentMetadata, document);
+        } else if (spec.getUpsertScript() != null) {
+          return String.format(
+              "{ \"update\" : %s }%n{ \"script\" : {\"source\": \"%s\", "
+                  + "\"params\": %s}, \"upsert\" : %s }%n",
+              documentMetadata, spec.getUpsertScript(), document, document);
+        } else {
+          return String.format("{ \"index\" : %s }%n%s%n", documentMetadata, document);
+        }
+      }
+    }
+
+    private static String lowerCaseOrNull(String input) {
+      return input == null ? null : input.toLowerCase();
+    }
+
+    /**
+     * Extracts the components that comprise the document address from the document using the {@link
+     * Write.FieldValueExtractFn} configured. This allows any or all of the index, type and document
+     * id to be controlled on a per document basis. If none are provided then an empty default of
+     * {@code {}} is returned. Sanitization of the index is performed, automatically lower-casing
+     * the value as required by Elasticsearch.
+     *
+     * @param parsedDocument the json from which the index, type and id may be extracted
+     * @return the document address as JSON or the default
+     * @throws IOException if the document cannot be parsed as JSON
+     */
+    private static String getDocumentMetadata(
+        DocToBulk spec, JsonNode parsedDocument, int backendVersion) throws IOException {
+      DocumentMetadata metadata =
+          new DocumentMetadata(
+              spec.getIndexFn() != null
+                  ? lowerCaseOrNull(spec.getIndexFn().apply(parsedDocument))
+                  : null,
+              spec.getTypeFn() != null
+                  ? lowerCaseOrNull(spec.getTypeFn().apply(parsedDocument))
+                  : null,
+              spec.getIdFn() != null ? spec.getIdFn().apply(parsedDocument) : null,
+              (spec.getUsePartialUpdate()
+                      || (spec.getUpsertScript() != null && !spec.getUpsertScript().isEmpty()))
+                  ? DEFAULT_RETRY_ON_CONFLICT
+                  : null,
+              spec.getRoutingFn() != null ? spec.getRoutingFn().apply(parsedDocument) : null,
+              backendVersion,
+              spec.getDocVersionFn() != null ? spec.getDocVersionFn().apply(parsedDocument) : null,
+              spec.getDocVersionType());
+      return OBJECT_MAPPER.writeValueAsString(metadata);
+    }
+
+    /** {@link DoFn} to for the {@link DocToBulk} transform. */
+    @VisibleForTesting
+    static class DocToBulkFn extends DoFn<String, String> {
+      private final DocToBulk spec;
+      private int backendVersion;
+
+      public DocToBulkFn(DocToBulk spec) {
+        this.spec = spec;
+      }
+
+      @Setup
+      public void setup() throws IOException {
+        ConnectionConfiguration connectionConfiguration = spec.getConnectionConfiguration();
+        if (spec.getBackendVersion() == null) {
+          backendVersion = ElasticsearchIO.getBackendVersion(connectionConfiguration);
+        } else {
+          backendVersion = spec.getBackendVersion();
+        }
+      }
+
+      @ProcessElement
+      public void processElement(ProcessContext c) {
+        try {
+          c.output(createBulkApiEntity(spec, c.element(), backendVersion));
+        } catch (IOException e) {
+          // TODO (egalpin): deadletter this
+        }
+      }
+    }
+  }
+
+  /**
+   * A {@link PTransform} convenience wrapper for doing both document to bulk API serialization as
+   * well as batching those Bulk API entities and writing them to an Elasticsearch cluster. This
+   * class is effectively a thin proxy for DocToBulk->BulkIO all-in-one for convenience and backward
+   * compatibility.
+   */
+  @AutoValue
+  public abstract static class Write extends PTransform<PCollection<String>, PDone> {
+    public interface FieldValueExtractFn extends SerializableFunction<JsonNode, String> {}
+
+    public interface BooleanFieldValueExtractFn extends SerializableFunction<JsonNode, Boolean> {}
+
+    abstract DocToBulk getDocToBulk();
+
+    abstract BulkIO getBulkIO();
+
+    abstract Builder writeBuilder();
+
+    @AutoValue.Builder
+    abstract static class Builder {
+      abstract Builder setDocToBulk(DocToBulk docToBulk);
+
+      abstract Builder setBulkIO(BulkIO bulkIO);
+
+      abstract Write build();
+    }
+
+    public PTransform<PCollection<String>, PCollection<String>> DocToBulk() {
+      return getDocToBulk();
+    }
+
+    public PTransform<PCollection<String>, PDone> BulkIO() {
+      return getBulkIO();
+    }
+
+    // For building Doc2Bulk
+    /** Refer to {@link DocToBulk#withIdFn} */
+    public Write withIdFn(FieldValueExtractFn idFn) {
+      return writeBuilder().setDocToBulk(getDocToBulk().withIdFn(idFn)).build();
+    }
+
+    /** Refer to {@link DocToBulk#withIndexFn} */
+    public Write withIndexFn(FieldValueExtractFn indexFn) {
+      return writeBuilder().setDocToBulk(getDocToBulk().withIndexFn(indexFn)).build();
+    }
+
+    /** Refer to {@link DocToBulk#withRoutingFn} */
+    public Write withRoutingFn(FieldValueExtractFn routingFn) {
+      return writeBuilder().setDocToBulk(getDocToBulk().withRoutingFn(routingFn)).build();
+    }
+
+    /** Refer to {@link DocToBulk#withTypeFn} */
+    public Write withTypeFn(FieldValueExtractFn typeFn) {
+      return writeBuilder().setDocToBulk(getDocToBulk().withTypeFn(typeFn)).build();
+    }
+
+    /** Refer to {@link DocToBulk#withDocVersionFn} */
+    public Write withDocVersionFn(FieldValueExtractFn docVersionFn) {
+      return writeBuilder().setDocToBulk(getDocToBulk().withDocVersionFn(docVersionFn)).build();
+    }
+
+    /** Refer to {@link DocToBulk#withDocVersionType} */
+    public Write withDocVersionType(String docVersionType) {
+      return writeBuilder().setDocToBulk(getDocToBulk().withDocVersionType(docVersionType)).build();
+    }
+
+    /** Refer to {@link DocToBulk#withUsePartialUpdate} */
+    public Write withUsePartialUpdate(boolean usePartialUpdate) {
+      return writeBuilder()
+          .setDocToBulk(getDocToBulk().withUsePartialUpdate(usePartialUpdate))
+          .build();
+    }
+
+    /** Refer to {@link DocToBulk#withUpsertScript} */
+    public Write withUpsertScript(String source) {
+      return writeBuilder().setDocToBulk(getDocToBulk().withUpsertScript(source)).build();
+    }
+
+    /** Refer to {@link DocToBulk#withBackendVersion} */
+    public Write withBackendVersion(int backendVersion) {
+      return writeBuilder().setDocToBulk(getDocToBulk().withBackendVersion(backendVersion)).build();
+    }
+
+    /** Refer to {@link DocToBulk#withIsDeleteFn} */
+    public Write withIsDeleteFn(Write.BooleanFieldValueExtractFn isDeleteFn) {
+      return writeBuilder().setDocToBulk(getDocToBulk().withIsDeleteFn(isDeleteFn)).build();
+    }
+    // End building Doc2Bulk
+
+    /** Refer to {@link BulkIO#withConnectionConfiguration} */
+    public Write withConnectionConfiguration(ConnectionConfiguration connectionConfiguration) {
+      checkArgument(connectionConfiguration != null, "connectionConfiguration can not be null");
+
+      return writeBuilder()
+          .setDocToBulk(getDocToBulk().withConnectionConfiguration(connectionConfiguration))
+          .setBulkIO(getBulkIO().withConnectionConfiguration(connectionConfiguration))
+          .build();
+    }
+
+    /** Refer to {@link BulkIO#withMaxBatchSize} */
+    public Write withMaxBatchSize(long batchSize) {
+      return writeBuilder().setBulkIO(getBulkIO().withMaxBatchSize(batchSize)).build();
+    }
+
+    /** Refer to {@link BulkIO#withMaxBatchSizeBytes} */
+    public Write withMaxBatchSizeBytes(long batchSizeBytes) {
+      return writeBuilder().setBulkIO(getBulkIO().withMaxBatchSizeBytes(batchSizeBytes)).build();
+    }
+
+    /** Refer to {@link BulkIO#withRetryConfiguration} */
+    public Write withRetryConfiguration(RetryConfiguration retryConfiguration) {
+      return writeBuilder()
+          .setBulkIO(getBulkIO().withRetryConfiguration(retryConfiguration))
+          .build();
+    }
+
+    /** Refer to {@link BulkIO#withIgnoreVersionConflicts} */
+    public Write withIgnoreVersionConflicts(boolean ignoreVersionConflicts) {
+      return writeBuilder()
+          .setBulkIO(getBulkIO().withIgnoreVersionConflicts(ignoreVersionConflicts))
+          .build();
+    }
+
+    /** Refer to {@link BulkIO#withUseStatefulBatches} */
+    public Write withUseStatefulBatches(boolean useStatefulBatches) {
+      return writeBuilder()
+          .setBulkIO(getBulkIO().withUseStatefulBatches(useStatefulBatches))
+          .build();
+    }
+
+    /** Refer to {@link BulkIO#withMaxBufferingDuration} */
+    public Write withMaxBufferingDuration(Duration maxBufferingDuration) {
+      return writeBuilder()
+          .setBulkIO(getBulkIO().withMaxBufferingDuration(maxBufferingDuration))
+          .build();
+    }
+
+    /** Refer to {@link BulkIO#withMaxParallelRequestsPerWindow} */
+    public Write withMaxParallelRquestsPerWindow(int maxParallelRquestsPerWindow) {
+      return writeBuilder()
+          .setBulkIO(getBulkIO().withMaxParallelRequestsPerWindow(maxParallelRquestsPerWindow))
+          .build();
+    }
+
+    /** Refer to {@link BulkIO#withAllowableResponseErrors} */
+    public Write withAllowableResponseErrors(@Nullable Set<String> allowableResponseErrors) {
+      if (allowableResponseErrors == null) {
+        allowableResponseErrors = new HashSet<>();
+      }
+
+      return writeBuilder()
+          .setBulkIO(getBulkIO().withAllowableResponseErrors(allowableResponseErrors))
+          .build();
+    }
+
+    @Override
+    public PDone expand(PCollection<String> input) {
+      input.apply(getDocToBulk()).apply(getBulkIO());
+      return PDone.in(input.getPipeline());
+    }
+  }
+
+  /** A {@link PTransform} writing data to Elasticsearch. */
+  @AutoValue
+  public abstract static class BulkIO extends PTransform<PCollection<String>, PDone> {
+    @Nullable
+    abstract ConnectionConfiguration getConnectionConfiguration();
+
+    abstract long getMaxBatchSize();
+
+    abstract long getMaxBatchSizeBytes();
+
+    @Nullable
+    abstract Duration getMaxBufferingDuration();
+
+    abstract boolean getUseStatefulBatches();
+
+    abstract int getMaxParallelRequestsPerWindow();
+
+    @Nullable
+    abstract RetryConfiguration getRetryConfiguration();
+
+    @Nullable
+    abstract Set<String> getAllowedResponseErrors();
+
+    abstract Builder builder();
+
+    @AutoValue.Builder
+    abstract static class Builder {
+      abstract Builder setConnectionConfiguration(ConnectionConfiguration connectionConfiguration);
+
+      abstract Builder setMaxBatchSize(long maxBatchSize);
+
+      abstract Builder setMaxBatchSizeBytes(long maxBatchSizeBytes);
+
+      abstract Builder setRetryConfiguration(RetryConfiguration retryConfiguration);
+
+      abstract Builder setAllowedResponseErrors(Set<String> allowedResponseErrors);
+
+      abstract Builder setMaxBufferingDuration(Duration maxBufferingDuration);
+
+      abstract Builder setUseStatefulBatches(boolean useStatefulBatches);
+
+      abstract Builder setMaxParallelRequestsPerWindow(int maxParallelRequestsPerWindow);
+
+      abstract BulkIO build();
+    }
+
+    /**
+     * Provide the Elasticsearch connection configuration object.
+     *
+     * @param connectionConfiguration the Elasticsearch {@link ConnectionConfiguration} object
+     * @return the {@link BulkIO} with connection configuration set
+     */
+    public BulkIO withConnectionConfiguration(ConnectionConfiguration connectionConfiguration) {
+      checkArgument(connectionConfiguration != null, "connectionConfiguration can not be null");
+
+      return builder().setConnectionConfiguration(connectionConfiguration).build();
+    }
+
+    /**
+     * Provide a maximum size in number of documents for the batch see bulk API
+     * (https://www.elastic.co/guide/en/elasticsearch/reference/2.4/docs-bulk.html). Default is 1000
+     * docs (like Elasticsearch bulk size advice). See
+     * https://www.elastic.co/guide/en/elasticsearch/guide/current/bulk.html Depending on the
+     * execution engine, size of bundles may vary, this sets the maximum size. Change this if you
+     * need to have smaller ElasticSearch bulks.
+     *
+     * @param batchSize maximum batch size in number of documents
+     * @return the {@link BulkIO} with connection batch size set
+     */
+    public BulkIO withMaxBatchSize(long batchSize) {
+      checkArgument(batchSize > 0, "batchSize must be > 0, but was %s", batchSize);
+      return builder().setMaxBatchSize(batchSize).build();
+    }
+
+    /**
+     * Provide a maximum size in bytes for the batch see bulk API
+     * (https://www.elastic.co/guide/en/elasticsearch/reference/2.4/docs-bulk.html). Default is 5MB
+     * (like Elasticsearch bulk size advice). See
+     * https://www.elastic.co/guide/en/elasticsearch/guide/current/bulk.html Depending on the
+     * execution engine, size of bundles may vary, this sets the maximum size. Change this if you
+     * need to have smaller ElasticSearch bulks.
+     *
+     * @param batchSizeBytes maximum batch size in bytes
+     * @return the {@link BulkIO} with connection batch size in bytes set
+     */
+    public BulkIO withMaxBatchSizeBytes(long batchSizeBytes) {
+      checkArgument(batchSizeBytes > 0, "batchSizeBytes must be > 0, but was %s", batchSizeBytes);
+      return builder().setMaxBatchSizeBytes(batchSizeBytes).build();
     }
 
     /**
@@ -1203,26 +1734,104 @@ public class ElasticsearchIO {
      * }</pre>
      *
      * @param retryConfiguration the rules which govern the retry behavior
-     * @return the {@link Write} with retrying configured
+     * @return the {@link BulkIO} with retrying configured
      */
-    public Write withRetryConfiguration(RetryConfiguration retryConfiguration) {
+    public BulkIO withRetryConfiguration(RetryConfiguration retryConfiguration) {
       checkArgument(retryConfiguration != null, "retryConfiguration is required");
       return builder().setRetryConfiguration(retryConfiguration).build();
     }
 
     /**
-     * Provide a function to extract the target operation either upsert or delete from the document
-     * fields allowing dynamic bulk operation decision. While using withIsDeleteFn, it should be
-     * taken care that the document's id extraction is defined using the withIdFn function or else
-     * IllegalArgumentException is thrown. Should the function throw an Exception then the batch
-     * will fail and the exception propagated.
+     * Whether or not to suppress version conflict errors in a Bulk API response. This can be useful
+     * if your use case involves using external version types.
      *
-     * @param isDeleteFn set to true for deleting the specific document
-     * @return the {@link Write} with the function set
+     * @param ignoreVersionConflicts true to suppress version conflicts, false to surface version
+     *     conflict errors.
+     * @return the {@link BulkIO} with version conflict handling configured
      */
-    public Write withIsDeleteFn(BooleanFieldValueExtractFn isDeleteFn) {
-      checkArgument(isDeleteFn != null, "deleteFn is required");
-      return builder().setIsDeleteFn(isDeleteFn).build();
+    public BulkIO withIgnoreVersionConflicts(boolean ignoreVersionConflicts) {
+      Set<String> allowedResponseErrors = getAllowedResponseErrors();
+      if (allowedResponseErrors == null) {
+        allowedResponseErrors = new HashSet<>();
+      }
+      if (ignoreVersionConflicts) {
+        allowedResponseErrors.add(VERSION_CONFLICT_ERROR);
+      }
+
+      return builder().setAllowedResponseErrors(allowedResponseErrors).build();
+    }
+
+    /**
+     * Provide a set of textual error types which can be contained in Bulk API response
+     * items[].error.type field. Any element in @param allowableResponseErrorTypes will suppress
+     * errors of the same type in Bulk responses.
+     *
+     * <p>See also
+     * https://www.elastic.co/guide/en/elasticsearch/reference/current/docs-bulk.html#bulk-failures-ex
+     *
+     * @param allowableResponseErrorTypes
+     * @return the {@link BulkIO} with allowable response errors set
+     */
+    public BulkIO withAllowableResponseErrors(@Nullable Set<String> allowableResponseErrorTypes) {
+      if (allowableResponseErrorTypes == null) {
+        allowableResponseErrorTypes = new HashSet<>();
+      }
+
+      return builder().setAllowedResponseErrors(allowableResponseErrorTypes).build();
+    }
+
+    /**
+     * If using {@link BulkIO#withUseStatefulBatches}, this can be used to set a maximum elapsed
+     * time before buffered elements are emitted to Elasticsearch as a Bulk API request. If this
+     * config is not set, Bulk requests will not be issued until {@link BulkIO#getMaxBatchSize}
+     * number of documents have been buffered. This may result in higher latency in particular if
+     * your max batch size is set to a large value and your pipeline input is low volume.
+     *
+     * @param maxBufferingDuration the maximum duration to wait before sending any buffered
+     *     documents to Elasticsearch, regardless of maxBatchSize.
+     * @return the {@link BulkIO} with maximum buffering duration set
+     */
+    public BulkIO withMaxBufferingDuration(Duration maxBufferingDuration) {
+      LOG.warn(
+          "Use of withMaxBufferingDuration requires withUseStatefulBatches(true). "
+              + "Setting that automatically.");
+      return builder()
+          .setUseStatefulBatches(true)
+          .setMaxBufferingDuration(maxBufferingDuration)
+          .build();
+    }
+
+    /**
+     * Whether or not to use Stateful Processing to ensure bulk requests have the desired number of
+     * entities i.e. as close to the maxBatchSize as possible. By default without this feature
+     * enabled, Bulk requests will not contain more than maxBatchSize entities, but the lower bound
+     * of batch size is determined by Beam Runner bundle sizes, which may be as few as 1.
+     *
+     * @param useStatefulBatches true enables the use of Stateful Processing to ensure that batches
+     *     are as close to the maxBatchSize as possible.
+     * @return the {@link BulkIO} with Stateful Processing enabled or disabled
+     */
+    public BulkIO withUseStatefulBatches(boolean useStatefulBatches) {
+      return builder().setUseStatefulBatches(useStatefulBatches).build();
+    }
+
+    /**
+     * When using {@link BulkIO#withUseStatefulBatches} Stateful Processing, states and therefore
+     * batches are maintained per-key-per-window. If data is globally windowed and this
+     * configuration is set to 1, there will only ever be 1 request in flight. Having only a single
+     * request in flight can be beneficial for ensuring an Elasticsearch cluster is not overwhelmed
+     * by parallel requests, but may not work for all use cases. If this number is less than the
+     * number of maximum workers in your pipeline, the IO work may not be distributed across all
+     * workers.
+     *
+     * @param maxParallelRequestsPerWindow the maximum number of parallel bulk requests for a window
+     *     of data
+     * @return the {@link BulkIO} with maximum parallel bulk requests per window set
+     */
+    public BulkIO withMaxParallelRequestsPerWindow(int maxParallelRequestsPerWindow) {
+      checkArgument(
+          maxParallelRequestsPerWindow > 0, "parameter value must be positive " + "a integer");
+      return builder().setMaxParallelRequestsPerWindow(maxParallelRequestsPerWindow).build();
     }
 
     @Override
@@ -1231,19 +1840,59 @@ public class ElasticsearchIO {
       FieldValueExtractFn idFn = getIdFn();
       BooleanFieldValueExtractFn isDeleteFn = getIsDeleteFn();
       checkState(connectionConfiguration != null, "withConnectionConfiguration() is required");
-      checkArgument(
-          isDeleteFn == null || idFn != null,
-          "Id needs to be specified by withIdFn for delete operation");
-      input.apply(ParDo.of(new WriteFn(this)));
+
+      if (getUseStatefulBatches()) {
+        GroupIntoBatches<Integer, String> groupIntoBatches =
+            GroupIntoBatches.ofSize(getMaxBatchSize());
+
+        if (getMaxBufferingDuration() != null) {
+          groupIntoBatches = groupIntoBatches.withMaxBufferingDuration(getMaxBufferingDuration());
+        }
+
+        input
+            .apply(ParDo.of(new AssignShardFn<>(getMaxParallelRequestsPerWindow())))
+            .apply(groupIntoBatches)
+            .apply(ParDo.of(new BulkIOStatefulFn(this)));
+      } else {
+        input.apply(ParDo.of(new BulkIOBundleFn(this)));
+      }
       return PDone.in(input.getPipeline());
     }
 
-    /** {@link DoFn} to for the {@link Write} transform. */
-    @VisibleForTesting
-    static class WriteFn extends DoFn<String, Void> {
-      private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
-      private static final int DEFAULT_RETRY_ON_CONFLICT = 5; // race conditions on updates
+    static class BulkIOBundleFn extends BulkIOBaseFn<String> {
+      @VisibleForTesting
+      BulkIOBundleFn(BulkIO _spec) {
+        this.spec = _spec;
+      }
 
+      @ProcessElement
+      public void processElement(ProcessContext context) throws Exception {
+        String bulkApiEntity = context.element();
+        addAndMaybeFlush(bulkApiEntity);
+      }
+    }
+
+    /*
+    Intended for use in conjunction with {@link GroupIntoBatches}
+     */
+    static class BulkIOStatefulFn extends BulkIOBaseFn<KV<Integer, Iterable<String>>> {
+      @VisibleForTesting
+      BulkIOStatefulFn(BulkIO _spec) {
+        this.spec = _spec;
+      }
+
+      @ProcessElement
+      public void processElement(ProcessContext context) throws Exception {
+        Iterable<String> bulkApiEntities = context.element().getValue();
+        for (String bulkApiEntity : bulkApiEntities) {
+          addAndMaybeFlush(bulkApiEntity);
+        }
+      }
+    }
+
+    /** {@link DoFn} to for the {@link BulkIO} transform. */
+    @VisibleForTesting
+    private abstract static class BulkIOBaseFn<T> extends DoFn<T, Void> {
       private static final Duration RETRY_INITIAL_BACKOFF = Duration.standardSeconds(5);
 
       @VisibleForTesting
@@ -1255,36 +1904,15 @@ public class ElasticsearchIO {
 
       private transient FluentBackoff retryBackoff;
 
-      private int backendVersion;
-      private final Write spec;
+      protected BulkIO spec;
       private transient RestClient restClient;
-      private ArrayList<String> batch;
-      private long currentBatchSizeBytes;
-
-      // Encapsulates the elements which form the metadata for an Elasticsearch bulk operation
-      private static class DocumentMetadata implements Serializable {
-        final String index;
-        final String type;
-        final String id;
-        final Integer retryOnConflict;
-
-        DocumentMetadata(String index, String type, String id, Integer retryOnConflict) {
-          this.index = index;
-          this.type = type;
-          this.id = id;
-          this.retryOnConflict = retryOnConflict;
-        }
-      }
-
-      @VisibleForTesting
-      WriteFn(Write spec) {
-        this.spec = spec;
-      }
+      protected ArrayList<String> batch;
+      long currentBatchSizeBytes;
 
       @Setup
       public void setup() throws IOException {
         ConnectionConfiguration connectionConfiguration = spec.getConnectionConfiguration();
-        backendVersion = getBackendVersion(connectionConfiguration);
+
         restClient = connectionConfiguration.createClient();
 
         retryBackoff =
@@ -1310,135 +1938,75 @@ public class ElasticsearchIO {
         currentBatchSizeBytes = 0;
       }
 
-      private class DocumentMetadataSerializer extends StdSerializer<DocumentMetadata> {
-
-        private DocumentMetadataSerializer() {
-          super(DocumentMetadata.class);
-        }
-
-        @Override
-        public void serialize(
-            DocumentMetadata value, JsonGenerator gen, SerializerProvider provider)
-            throws IOException {
-          gen.writeStartObject();
-          if (value.index != null) {
-            gen.writeStringField("_index", value.index);
-          }
-          if (value.type != null) {
-            gen.writeStringField("_type", value.type);
-          }
-          if (value.id != null) {
-            gen.writeStringField("_id", value.id);
-          }
-          if (value.retryOnConflict != null && (backendVersion <= 6)) {
-            gen.writeNumberField("_retry_on_conflict", value.retryOnConflict);
-          }
-          if (value.retryOnConflict != null && backendVersion >= 7) {
-            gen.writeNumberField("retry_on_conflict", value.retryOnConflict);
-          }
-          gen.writeEndObject();
-        }
-      }
-      /**
-       * Extracts the components that comprise the document address from the document using the
-       * {@link FieldValueExtractFn} configured. This allows any or all of the index, type and
-       * document id to be controlled on a per document basis. Sanitization of the index is
-       * performed, automatically lower-casing the value as required by Elasticsearch.
-       *
-       * @param parsedDocument the json from which the index, type and id may be extracted
-       * @return the document address as JSON or the default
-       * @throws IOException if the document cannot be parsed as JSON
-       */
-      private String getDocumentMetadata(JsonNode parsedDocument) throws IOException {
-        DocumentMetadata metadata =
-            new DocumentMetadata(
-                spec.getIndexFn() != null
-                    ? lowerCaseOrNull(spec.getIndexFn().apply(parsedDocument))
-                    : null,
-                spec.getTypeFn() != null ? spec.getTypeFn().apply(parsedDocument) : null,
-                spec.getIdFn() != null ? spec.getIdFn().apply(parsedDocument) : null,
-                spec.getUsePartialUpdate() ? DEFAULT_RETRY_ON_CONFLICT : null);
-        return OBJECT_MAPPER.writeValueAsString(metadata);
-      }
-
-      private static String lowerCaseOrNull(String input) {
-        return input == null ? null : input.toLowerCase();
-      }
-
-      @ProcessElement
-      public void processElement(ProcessContext context) throws Exception {
-        String document = context.element(); // use configuration and auto-generated document IDs
-        String documentMetadata = "{}";
-        boolean isDelete = false;
-        if (spec.getIndexFn() != null || spec.getTypeFn() != null || spec.getIdFn() != null) {
-          // parse once and reused for efficiency
-          JsonNode parsedDocument = OBJECT_MAPPER.readTree(document);
-          documentMetadata = getDocumentMetadata(parsedDocument);
-          if (spec.getIsDeleteFn() != null) {
-            isDelete = spec.getIsDeleteFn().apply(parsedDocument);
-          }
-        }
-
-        if (isDelete) {
-          // delete request used for deleting a document.
-          batch.add(String.format("{ \"delete\" : %s }%n", documentMetadata));
-        } else {
-          // index is an insert/upsert and update is a partial update (or insert if not existing)
-          if (spec.getUsePartialUpdate()) {
-            batch.add(
-                String.format(
-                    "{ \"update\" : %s }%n{ \"doc\" : %s, \"doc_as_upsert\" : true }%n",
-                    documentMetadata, document));
-          } else {
-            batch.add(String.format("{ \"index\" : %s }%n%s%n", documentMetadata, document));
-          }
-        }
-
-        currentBatchSizeBytes += document.getBytes(StandardCharsets.UTF_8).length;
-        if (batch.size() >= spec.getMaxBatchSize()
-            || currentBatchSizeBytes >= spec.getMaxBatchSizeBytes()) {
-          flushBatch();
-        }
-      }
-
       @FinishBundle
       public void finishBundle(FinishBundleContext context)
           throws IOException, InterruptedException {
         flushBatch();
       }
 
+      protected void addAndMaybeFlush(String bulkApiEntity)
+          throws IOException, InterruptedException {
+        batch.add(bulkApiEntity);
+        currentBatchSizeBytes += bulkApiEntity.getBytes(StandardCharsets.UTF_8).length;
+
+        if (batch.size() >= spec.getMaxBatchSize()
+            || currentBatchSizeBytes >= spec.getMaxBatchSizeBytes()) {
+          flushBatch();
+        }
+      }
+
       private void flushBatch() throws IOException, InterruptedException {
         if (batch.isEmpty()) {
           return;
         }
+
+        LOG.info(
+            "ElasticsearchIO batch size: {}, batch size bytes: {}",
+            batch.size(),
+            currentBatchSizeBytes);
+
         StringBuilder bulkRequest = new StringBuilder();
         for (String json : batch) {
           bulkRequest.append(json);
         }
+
         batch.clear();
-        currentBatchSizeBytes = 0;
-        Response response;
-        HttpEntity responseEntity;
+        currentBatchSizeBytes = 0L;
+
+        Response response = null;
+        HttpEntity responseEntity = null;
         // Elasticsearch will default to the index/type provided here if none are set in the
-        // document meta (i.e. using ElasticsearchIO$Write#withIndexFn and
-        // ElasticsearchIO$Write#withTypeFn options)
-        String endPoint =
-            String.format(
-                "/%s/%s/_bulk",
-                spec.getConnectionConfiguration().getIndex(),
-                spec.getConnectionConfiguration().getType());
+        // document meta (i.e. using ElasticsearchIO$DocToBulk#withIndexFn and
+        // ElasticsearchIO$DocToBulk#withTypeFn options)
+        String endPoint = "/_bulk";
         HttpEntity requestBody =
             new NStringEntity(bulkRequest.toString(), ContentType.APPLICATION_JSON);
-        Request request = new Request("POST", endPoint);
-        request.addParameters(Collections.emptyMap());
-        request.setEntity(requestBody);
-        response = restClient.performRequest(request);
-        responseEntity = new BufferedHttpEntity(response.getEntity());
+        try {
+          Request request = new Request("POST", endPoint);
+          request.addParameters(Collections.emptyMap());
+          request.setEntity(requestBody);
+          response = restClient.performRequest(request);
+          responseEntity = new BufferedHttpEntity(response.getEntity());
+        } catch (java.io.IOException ex) {
+          if (spec.getRetryConfiguration() == null) {
+            throw ex;
+          }
+          LOG.error("Caught ES timeout, retrying", ex);
+        }
+
         if (spec.getRetryConfiguration() != null
-            && spec.getRetryConfiguration().getRetryPredicate().test(responseEntity)) {
+            && (response == null
+                || responseEntity == null
+                || spec.getRetryConfiguration().getRetryPredicate().test(responseEntity))) {
+          if (responseEntity != null
+              && spec.getRetryConfiguration().getRetryPredicate().test(responseEntity)) {
+            LOG.warn("ES Cluster is responding with HTP 429 - TOO_MANY_REQUESTS.");
+          }
           responseEntity = handleRetry("POST", endPoint, Collections.emptyMap(), requestBody);
         }
-        checkForErrors(responseEntity, backendVersion, spec.getUsePartialUpdate());
+        checkForErrors(responseEntity, spec.getAllowedResponseErrors());
+
+        // TODO egalpin: create a metric here for count of successfully written docs
       }
 
       /** retry request based on retry configuration policy. */
@@ -1453,14 +2021,23 @@ public class ElasticsearchIO {
         // while retry policy exists
         while (BackOffUtils.next(sleeper, backoff)) {
           LOG.warn(String.format(RETRY_ATTEMPT_LOG, ++attempt));
-          Request request = new Request(method, endpoint);
-          request.addParameters(params);
-          request.setEntity(requestBody);
-          response = restClient.performRequest(request);
-          responseEntity = new BufferedHttpEntity(response.getEntity());
+          try {
+            Request request = new Request(method, endpoint);
+            request.addParameters(params);
+            request.setEntity(requestBody);
+            response = restClient.performRequest(request);
+            responseEntity = new BufferedHttpEntity(response.getEntity());
+          } catch (java.io.IOException ex) {
+            LOG.error("Caught ES timeout, retrying", ex);
+            continue;
+          }
           // if response has no 429 errors
-          if (!spec.getRetryConfiguration().getRetryPredicate().test(responseEntity)) {
+          if (!Objects.requireNonNull(spec.getRetryConfiguration())
+              .getRetryPredicate()
+              .test(responseEntity)) {
             return responseEntity;
+          } else {
+            LOG.warn("ES Cluster is responding with HTP 429 - TOO_MANY_REQUESTS.");
           }
         }
         throw new IOException(String.format(RETRY_FAILED_LOG, attempt));
@@ -1475,6 +2052,40 @@ public class ElasticsearchIO {
     }
   }
 
+  private static class AssignShardFn<T> extends DoFn<T, KV<Integer, T>> {
+    // Ripped from Reshuffle:
+    // https://github.com/apache/beam/blob/v2.28.0/sdks/java/core/src/main/java/org/apache/beam/sdk/transforms/Reshuffle.java#L133
+    private int shard;
+    private @Nullable Integer numBuckets;
+
+    private AssignShardFn(@Nullable Integer numBuckets) {
+      this.numBuckets = numBuckets;
+    }
+
+    @Setup
+    public void setup() {
+      shard = ThreadLocalRandom.current().nextInt();
+    }
+
+    @ProcessElement
+    public void processElement(@Element T element, OutputReceiver<KV<Integer, T>> r) {
+      ++shard;
+      // Smear the shard into something more random-looking, to avoid issues
+      // with runners that don't properly hash the key being shuffled, but rely
+      // on it being random-looking. E.g. Spark takes the Java hashCode() of keys,
+      // which for Integer is a no-op and it is an issue:
+      // http://hydronitrogen.com/poor-hash-partitioning-of-timestamps-integers-and-longs-in-
+      // spark.html
+      // This hashing strategy is copied from
+      // org.apache.beam.vendor.guava.v26_0_jre.com.google.common.collect.Hashing.smear().
+      int hashOfShard = 0x1b873593 * Integer.rotateLeft(shard * 0xcc9e2d51, 15);
+      if (numBuckets != null) {
+        hashOfShard %= numBuckets;
+      }
+      r.output(KV.of(hashOfShard, element));
+    }
+  }
+
   static int getBackendVersion(ConnectionConfiguration connectionConfiguration) {
     try (RestClient restClient = connectionConfiguration.createClient()) {
       Request request = new Request("GET", "");
@@ -1483,10 +2094,7 @@ public class ElasticsearchIO {
       int backendVersion =
           Integer.parseInt(jsonNode.path("version").path("number").asText().substring(0, 1));
       checkArgument(
-          (backendVersion == 2
-              || backendVersion == 5
-              || backendVersion == 6
-              || backendVersion == 7),
+          (VALID_CLUSTER_VERSIONS.contains(backendVersion)),
           "The Elasticsearch version to connect to is %s.x. "
               + "This version of the ElasticsearchIO is only compatible with "
               + "Elasticsearch v7.x, v6.x, v5.x and v2.x",
