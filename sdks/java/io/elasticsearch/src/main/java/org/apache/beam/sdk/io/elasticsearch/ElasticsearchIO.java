@@ -44,9 +44,9 @@ import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.Objects;
 import java.util.Set;
-import java.util.concurrent.ThreadLocalRandom;
 import java.util.function.Predicate;
 import javax.annotation.Nonnull;
+import javax.annotation.Nullable;
 import javax.net.ssl.SSLContext;
 import org.apache.beam.sdk.annotations.Experimental;
 import org.apache.beam.sdk.annotations.Experimental.Kind;
@@ -80,7 +80,6 @@ import org.apache.http.impl.client.BasicCredentialsProvider;
 import org.apache.http.nio.conn.ssl.SSLIOSessionStrategy;
 import org.apache.http.nio.entity.NStringEntity;
 import org.apache.http.ssl.SSLContexts;
-import org.checkerframework.checker.nullness.qual.Nullable;
 import org.elasticsearch.client.Request;
 import org.elasticsearch.client.Response;
 import org.elasticsearch.client.RestClient;
@@ -1067,8 +1066,6 @@ public class ElasticsearchIO {
       OBJECT_MAPPER.registerModule(module);
     }
 
-    public interface BooleanFieldValueExtractFn extends SerializableFunction<JsonNode, Boolean> {}
-
     abstract @Nullable ConnectionConfiguration getConnectionConfiguration();
 
     abstract @Nullable Write.FieldValueExtractFn getIdFn();
@@ -1080,8 +1077,6 @@ public class ElasticsearchIO {
     abstract @Nullable Write.FieldValueExtractFn getTypeFn();
 
     abstract @Nullable Write.FieldValueExtractFn getDocVersionFn();
-
-    abstract @Nullable RetryConfiguration getRetryConfiguration();
 
     abstract @Nullable String getDocVersionType();
 
@@ -1837,8 +1832,6 @@ public class ElasticsearchIO {
     @Override
     public PDone expand(PCollection<String> input) {
       ConnectionConfiguration connectionConfiguration = getConnectionConfiguration();
-      FieldValueExtractFn idFn = getIdFn();
-      BooleanFieldValueExtractFn isDeleteFn = getIsDeleteFn();
       checkState(connectionConfiguration != null, "withConnectionConfiguration() is required");
 
       if (getUseStatefulBatches()) {
@@ -1850,7 +1843,7 @@ public class ElasticsearchIO {
         }
 
         input
-            .apply(ParDo.of(new AssignShardFn<>(getMaxParallelRequestsPerWindow())))
+            .apply(ParDo.of(new Reshuffle.AssignShardFn<>(getMaxParallelRequestsPerWindow())))
             .apply(groupIntoBatches)
             .apply(ParDo.of(new BulkIOStatefulFn(this)));
       } else {
@@ -1925,11 +1918,6 @@ public class ElasticsearchIO {
                   .withMaxRetries(spec.getRetryConfiguration().getMaxAttempts() - 1)
                   .withMaxCumulativeBackoff(spec.getRetryConfiguration().getMaxDuration());
         }
-        // configure a custom serializer for metadata to be able to change serialization based
-        // on ES version
-        SimpleModule module = new SimpleModule();
-        module.addSerializer(DocumentMetadata.class, new DocumentMetadataSerializer());
-        OBJECT_MAPPER.registerModule(module);
       }
 
       @StartBundle
@@ -2049,40 +2037,6 @@ public class ElasticsearchIO {
           restClient.close();
         }
       }
-    }
-  }
-
-  private static class AssignShardFn<T> extends DoFn<T, KV<Integer, T>> {
-    // Ripped from Reshuffle:
-    // https://github.com/apache/beam/blob/v2.28.0/sdks/java/core/src/main/java/org/apache/beam/sdk/transforms/Reshuffle.java#L133
-    private int shard;
-    private @Nullable Integer numBuckets;
-
-    private AssignShardFn(@Nullable Integer numBuckets) {
-      this.numBuckets = numBuckets;
-    }
-
-    @Setup
-    public void setup() {
-      shard = ThreadLocalRandom.current().nextInt();
-    }
-
-    @ProcessElement
-    public void processElement(@Element T element, OutputReceiver<KV<Integer, T>> r) {
-      ++shard;
-      // Smear the shard into something more random-looking, to avoid issues
-      // with runners that don't properly hash the key being shuffled, but rely
-      // on it being random-looking. E.g. Spark takes the Java hashCode() of keys,
-      // which for Integer is a no-op and it is an issue:
-      // http://hydronitrogen.com/poor-hash-partitioning-of-timestamps-integers-and-longs-in-
-      // spark.html
-      // This hashing strategy is copied from
-      // org.apache.beam.vendor.guava.v26_0_jre.com.google.common.collect.Hashing.smear().
-      int hashOfShard = 0x1b873593 * Integer.rotateLeft(shard * 0xcc9e2d51, 15);
-      if (numBuckets != null) {
-        hashOfShard %= numBuckets;
-      }
-      r.output(KV.of(hashOfShard, element));
     }
   }
 

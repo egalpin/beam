@@ -122,15 +122,7 @@ public class Reshuffle<K, V> extends PTransform<PCollection<KV<K, V>>, PCollecti
       return new ViaRandomKey<>(numBuckets);
     }
 
-    @Override
-    public PCollection<T> expand(PCollection<T> input) {
-      return input
-          .apply("Pair with random key", ParDo.of(new AssignShardFn<>(numBuckets)))
-          .apply(Reshuffle.of())
-          .apply(Values.create());
-    }
-
-    private static class AssignShardFn<T> extends DoFn<T, KV<Integer, T>> {
+    public static class AssignShardFn<T> extends DoFn<T, KV<Integer, T>> {
       private int shard;
       private @Nullable Integer numBuckets;
 
@@ -161,5 +153,14 @@ public class Reshuffle<K, V> extends PTransform<PCollection<KV<K, V>>, PCollecti
         r.output(KV.of(hashOfShard, element));
       }
     }
+
+    @Override
+    public PCollection<T> expand(PCollection<T> input) {
+      return input
+          .apply("Pair with random key", ParDo.of(new AssignShardFn<>(numBuckets)))
+          .apply(Reshuffle.of())
+          .apply(Values.create());
+    }
+
   }
 }
