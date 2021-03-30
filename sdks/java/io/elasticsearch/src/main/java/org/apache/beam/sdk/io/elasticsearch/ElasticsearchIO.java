@@ -27,6 +27,7 @@ import com.fasterxml.jackson.databind.SerializerProvider;
 import com.fasterxml.jackson.databind.module.SimpleModule;
 import com.fasterxml.jackson.databind.ser.std.StdSerializer;
 import com.google.auto.value.AutoValue;
+import com.google.common.base.Joiner;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
@@ -58,6 +59,7 @@ import org.apache.beam.sdk.io.BoundedSource;
 import org.apache.beam.sdk.options.PipelineOptions;
 import org.apache.beam.sdk.options.ValueProvider;
 import org.apache.beam.sdk.transforms.DoFn;
+import org.apache.beam.sdk.transforms.GroupIntoBatches;
 import org.apache.beam.sdk.transforms.PTransform;
 import org.apache.beam.sdk.transforms.ParDo;
 import org.apache.beam.sdk.transforms.SerializableFunction;
@@ -71,7 +73,6 @@ import org.apache.beam.sdk.values.PBegin;
 import org.apache.beam.sdk.values.PCollection;
 import org.apache.beam.sdk.values.PDone;
 import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.annotations.VisibleForTesting;
-import org.apache.commons.lang3.StringUtils;
 import org.apache.http.HttpEntity;
 import org.apache.http.HttpHost;
 import org.apache.http.auth.AuthScope;
@@ -1254,7 +1255,7 @@ public class ElasticsearchIO {
       checkArgument(
           VERSION_TYPES.contains(docVersionType),
           "docVersionType must be one of " + "%s",
-          StringUtils.join(VERSION_TYPES));
+          Joiner.on(" ").join(VERSION_TYPES));
       return builder().setDocVersionType(docVersionType).build();
     }
 
@@ -1271,7 +1272,7 @@ public class ElasticsearchIO {
       checkArgument(
           VALID_CLUSTER_VERSIONS.contains(backendVersion),
           "Backend version may only be one of " + "%s",
-          StringUtils.join(VALID_CLUSTER_VERSIONS));
+          Joiner.on(" ").join(VERSION_TYPES));
       return builder().setBackendVersion(backendVersion).build();
     }
 
