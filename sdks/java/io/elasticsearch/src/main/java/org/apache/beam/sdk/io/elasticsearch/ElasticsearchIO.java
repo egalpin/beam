@@ -27,7 +27,6 @@ import com.fasterxml.jackson.databind.SerializerProvider;
 import com.fasterxml.jackson.databind.module.SimpleModule;
 import com.fasterxml.jackson.databind.ser.std.StdSerializer;
 import com.google.auto.value.AutoValue;
-import com.google.common.base.Joiner;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
@@ -62,6 +61,7 @@ import org.apache.beam.sdk.transforms.DoFn;
 import org.apache.beam.sdk.transforms.GroupIntoBatches;
 import org.apache.beam.sdk.transforms.PTransform;
 import org.apache.beam.sdk.transforms.ParDo;
+import org.apache.beam.sdk.transforms.Reshuffle;
 import org.apache.beam.sdk.transforms.SerializableFunction;
 import org.apache.beam.sdk.transforms.display.DisplayData;
 import org.apache.beam.sdk.util.BackOff;
@@ -1076,15 +1076,15 @@ public class ElasticsearchIO {
 
     abstract @Nullable ConnectionConfiguration getConnectionConfiguration();
 
-    abstract @Nullable Write.FieldValueExtractFn getIdFn();
+    abstract Write.@Nullable FieldValueExtractFn getIdFn();
 
-    abstract @Nullable Write.FieldValueExtractFn getIndexFn();
+    abstract Write.@Nullable FieldValueExtractFn getIndexFn();
 
-    abstract @Nullable Write.FieldValueExtractFn getRoutingFn();
+    abstract Write.@Nullable FieldValueExtractFn getRoutingFn();
 
-    abstract @Nullable Write.FieldValueExtractFn getTypeFn();
+    abstract Write.@Nullable FieldValueExtractFn getTypeFn();
 
-    abstract @Nullable Write.FieldValueExtractFn getDocVersionFn();
+    abstract Write.@Nullable FieldValueExtractFn getDocVersionFn();
 
     abstract @Nullable String getDocVersionType();
 
@@ -1092,7 +1092,7 @@ public class ElasticsearchIO {
 
     abstract @Nullable Boolean getUsePartialUpdate();
 
-    abstract @Nullable Write.BooleanFieldValueExtractFn getIsDeleteFn();
+    abstract Write.@Nullable BooleanFieldValueExtractFn getIsDeleteFn();
 
     abstract @Nullable Integer getBackendVersion();
 
@@ -1255,7 +1255,7 @@ public class ElasticsearchIO {
       checkArgument(
           VERSION_TYPES.contains(docVersionType),
           "docVersionType must be one of " + "%s",
-          Joiner.on(" ").join(VERSION_TYPES));
+          String.join(", ", VERSION_TYPES));
       return builder().setDocVersionType(docVersionType).build();
     }
 
@@ -1272,7 +1272,7 @@ public class ElasticsearchIO {
       checkArgument(
           VALID_CLUSTER_VERSIONS.contains(backendVersion),
           "Backend version may only be one of " + "%s",
-          Joiner.on(" ").join(VERSION_TYPES));
+          String.join(", ", VERSION_TYPES));
       return builder().setBackendVersion(backendVersion).build();
     }
 
@@ -1626,25 +1626,21 @@ public class ElasticsearchIO {
   /** A {@link PTransform} writing data to Elasticsearch. */
   @AutoValue
   public abstract static class BulkIO extends PTransform<PCollection<String>, PDone> {
-    @Nullable
-    abstract ConnectionConfiguration getConnectionConfiguration();
+    abstract @Nullable ConnectionConfiguration getConnectionConfiguration();
 
     abstract long getMaxBatchSize();
 
     abstract long getMaxBatchSizeBytes();
 
-    @Nullable
-    abstract Duration getMaxBufferingDuration();
+    abstract @Nullable Duration getMaxBufferingDuration();
 
     abstract boolean getUseStatefulBatches();
 
     abstract int getMaxParallelRequestsPerWindow();
 
-    @Nullable
-    abstract RetryConfiguration getRetryConfiguration();
+    abstract @Nullable RetryConfiguration getRetryConfiguration();
 
-    @Nullable
-    abstract Set<String> getAllowedResponseErrors();
+    abstract @Nullable Set<String> getAllowedResponseErrors();
 
     abstract Builder builder();
 
