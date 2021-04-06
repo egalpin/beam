@@ -1475,9 +1475,9 @@ public class ElasticsearchIO {
 
     public interface BooleanFieldValueExtractFn extends SerializableFunction<JsonNode, Boolean> {}
 
-    abstract DocToBulk getDocToBulk();
+    public abstract DocToBulk getDocToBulk();
 
-    abstract BulkIO getBulkIO();
+    public abstract BulkIO getBulkIO();
 
     abstract Builder writeBuilder();
 
@@ -1488,14 +1488,6 @@ public class ElasticsearchIO {
       abstract Builder setBulkIO(BulkIO bulkIO);
 
       abstract Write build();
-    }
-
-    public PTransform<PCollection<String>, PCollection<String>> docToBulk() {
-      return getDocToBulk();
-    }
-
-    public PTransform<PCollection<String>, PDone> bulkIO() {
-      return getBulkIO();
     }
 
     // For building Doc2Bulk
@@ -1628,6 +1620,12 @@ public class ElasticsearchIO {
   /** A {@link PTransform} writing data to Elasticsearch. */
   @AutoValue
   public abstract static class BulkIO extends PTransform<PCollection<String>, PDone> {
+    @VisibleForTesting
+    static final String RETRY_ATTEMPT_LOG = "Error writing to Elasticsearch. Retry attempt[%d]";
+
+    @VisibleForTesting
+    static final String RETRY_FAILED_LOG = "Error writing to ES after %d attempt(s). No more attempts allowed";
+
     abstract @Nullable ConnectionConfiguration getConnectionConfiguration();
 
     abstract long getMaxBatchSize();
@@ -1889,13 +1887,6 @@ public class ElasticsearchIO {
     @VisibleForTesting
     private abstract static class BulkIOBaseFn<T> extends DoFn<T, Void> {
       private static final Duration RETRY_INITIAL_BACKOFF = Duration.standardSeconds(5);
-
-      @VisibleForTesting
-      static final String RETRY_ATTEMPT_LOG = "Error writing to Elasticsearch. Retry attempt[%d]";
-
-      @VisibleForTesting
-      static final String RETRY_FAILED_LOG =
-          "Error writing to ES after %d attempt(s). No more attempts allowed";
 
       private transient FluentBackoff retryBackoff;
 

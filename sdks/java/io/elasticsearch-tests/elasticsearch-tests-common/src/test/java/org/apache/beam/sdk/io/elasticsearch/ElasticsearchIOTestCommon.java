@@ -18,7 +18,9 @@
 package org.apache.beam.sdk.io.elasticsearch;
 
 import static org.apache.beam.sdk.io.elasticsearch.ElasticsearchIO.BoundedElasticsearchSource;
+import static org.apache.beam.sdk.io.elasticsearch.ElasticsearchIO.BulkIO;
 import static org.apache.beam.sdk.io.elasticsearch.ElasticsearchIO.ConnectionConfiguration;
+import static org.apache.beam.sdk.io.elasticsearch.ElasticsearchIO.DocToBulk;
 import static org.apache.beam.sdk.io.elasticsearch.ElasticsearchIO.Read;
 import static org.apache.beam.sdk.io.elasticsearch.ElasticsearchIO.RetryConfiguration.DEFAULT_RETRY_PREDICATE;
 import static org.apache.beam.sdk.io.elasticsearch.ElasticsearchIO.Write;
@@ -258,10 +260,6 @@ class ElasticsearchIOTestCommon implements Serializable {
   }
 
   void testWriteWithErrors() throws Exception {
-    Write write =
-        ElasticsearchIO.write()
-            .withConnectionConfiguration(connectionConfiguration)
-            .withMaxBatchSize(BATCH_SIZE);
     List<String> input =
         ElasticsearchIOTestUtils.createDocuments(
             numDocs, ElasticsearchIOTestUtils.InjectionMode.INJECT_SOME_INVALID_DOCS);
@@ -284,12 +282,15 @@ class ElasticsearchIOTestCommon implements Serializable {
                     + "Document id .+: failed to parse \\(.+\\).*Caused by: .+ \\(.+\\).*");
           }
         });
-    // write bundles size is the runner decision, we cannot force a bundle size,
-    // so we test the Writer as a DoFn outside of a runner.
-    try (DoFnTester<String, Void> fnTester = DoFnTester.of(new Write.WriteFn(write))) {
-      // inserts into Elasticsearch
-      fnTester.processBundle(input);
-    }
+
+    pipeline
+        .apply(Create.of(input))
+        .apply(
+            ElasticsearchIO.write()
+                .withConnectionConfiguration(connectionConfiguration)
+                .withMaxBatchSize(BATCH_SIZE)
+                .withUseStatefulBatches(true));
+    pipeline.run();
   }
 
   void testWriteWithMaxBatchSize() throws Exception {
@@ -297,15 +298,24 @@ class ElasticsearchIOTestCommon implements Serializable {
         ElasticsearchIO.write()
             .withConnectionConfiguration(connectionConfiguration)
             .withMaxBatchSize(BATCH_SIZE);
+
     // write bundles size is the runner decision, we cannot force a bundle size,
     // so we test the Writer as a DoFn outside of a runner.
-    try (DoFnTester<String, Void> fnTester = DoFnTester.of(new Write.WriteFn(write))) {
+    try (DoFnTester<String, Void> fnTester =
+        DoFnTester.of(new BulkIO.BulkIOBundleFn(write.getBulkIO()))) {
       List<String> input =
           ElasticsearchIOTestUtils.createDocuments(
               numDocs, ElasticsearchIOTestUtils.InjectionMode.DO_NOT_INJECT_INVALID_DOCS);
+
+      List<String> serializedInput = new ArrayList<>();
+      for (String doc : input) {
+        serializedInput.add(
+            DocToBulk.createBulkApiEntity(
+                write.getDocToBulk(), doc, getBackendVersion(connectionConfiguration)));
+      }
       long numDocsProcessed = 0;
       long numDocsInserted = 0;
-      for (String document : input) {
+      for (String document : serializedInput) {
         fnTester.processElement(document);
         numDocsProcessed++;
         // test every 100 docs to avoid overloading ES
@@ -340,15 +350,22 @@ class ElasticsearchIOTestCommon implements Serializable {
             .withMaxBatchSizeBytes(BATCH_SIZE_BYTES);
     // write bundles size is the runner decision, we cannot force a bundle size,
     // so we test the Writer as a DoFn outside of a runner.
-    try (DoFnTester<String, Void> fnTester = DoFnTester.of(new Write.WriteFn(write))) {
+    try (DoFnTester<String, Void> fnTester =
+        DoFnTester.of(new BulkIO.BulkIOBundleFn(write.getBulkIO()))) {
       List<String> input =
           ElasticsearchIOTestUtils.createDocuments(
               numDocs, ElasticsearchIOTestUtils.InjectionMode.DO_NOT_INJECT_INVALID_DOCS);
+      List<String> serializedInput = new ArrayList<>();
+      for (String doc : input) {
+        serializedInput.add(
+            DocToBulk.createBulkApiEntity(
+                write.getDocToBulk(), doc, getBackendVersion(connectionConfiguration)));
+      }
       long numDocsProcessed = 0;
       long sizeProcessed = 0;
       long numDocsInserted = 0;
       long batchInserted = 0;
-      for (String document : input) {
+      for (String document : serializedInput) {
         fnTester.processElement(document);
         numDocsProcessed++;
         sizeProcessed += document.getBytes(StandardCharsets.UTF_8).length;
@@ -627,7 +644,7 @@ class ElasticsearchIOTestCommon implements Serializable {
     // max attempt is 3, but retry is 2 which excludes 1st attempt when error was identified and
     // retry started.
     expectedException.expectMessage(
-        String.format(ElasticsearchIO.Write.WriteFn.RETRY_FAILED_LOG, EXPECTED_RETRIES));
+        String.format(ElasticsearchIO.BulkIO.RETRY_FAILED_LOG, EXPECTED_RETRIES));
 
     ElasticsearchIO.Write write =
         ElasticsearchIO.write()

@@ -126,8 +126,7 @@ class ElasticsearchIOTestUtils {
     request.addParameters(Collections.singletonMap("refresh", "wait_for"));
     request.setEntity(requestBody);
     Response response = restClient.performRequest(request);
-    ElasticsearchIO.checkForErrors(
-        response.getEntity(), ElasticsearchIO.getBackendVersion(connectionConfiguration), false);
+    ElasticsearchIO.checkForErrors(response.getEntity(), Collections.emptySet());
   }
   /**
    * Forces a refresh of the given index to make recently inserted documents available for search
