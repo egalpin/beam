@@ -257,7 +257,9 @@ public class ElasticsearchIO {
         String cbType = causedBy.path("type").asText();
         errorMessages.append(String.format("%nCaused by: %s (%s)", cbReason, cbType));
       }
-      if (numErrors > 0) throw new IOException(errorMessages.toString());
+      if (numErrors > 0) {
+        throw new IOException(errorMessages.toString());
+      }
     }
   }
 
@@ -1488,69 +1490,69 @@ public class ElasticsearchIO {
       abstract Write build();
     }
 
-    public PTransform<PCollection<String>, PCollection<String>> DocToBulk() {
+    public PTransform<PCollection<String>, PCollection<String>> docToBulk() {
       return getDocToBulk();
     }
 
-    public PTransform<PCollection<String>, PDone> BulkIO() {
+    public PTransform<PCollection<String>, PDone> bulkIO() {
       return getBulkIO();
     }
 
     // For building Doc2Bulk
-    /** Refer to {@link DocToBulk#withIdFn} */
+    /** Refer to {@link DocToBulk#withIdFn}. */
     public Write withIdFn(FieldValueExtractFn idFn) {
       return writeBuilder().setDocToBulk(getDocToBulk().withIdFn(idFn)).build();
     }
 
-    /** Refer to {@link DocToBulk#withIndexFn} */
+    /** Refer to {@link DocToBulk#withIndexFn}. */
     public Write withIndexFn(FieldValueExtractFn indexFn) {
       return writeBuilder().setDocToBulk(getDocToBulk().withIndexFn(indexFn)).build();
     }
 
-    /** Refer to {@link DocToBulk#withRoutingFn} */
+    /** Refer to {@link DocToBulk#withRoutingFn}. */
     public Write withRoutingFn(FieldValueExtractFn routingFn) {
       return writeBuilder().setDocToBulk(getDocToBulk().withRoutingFn(routingFn)).build();
     }
 
-    /** Refer to {@link DocToBulk#withTypeFn} */
+    /** Refer to {@link DocToBulk#withTypeFn}. */
     public Write withTypeFn(FieldValueExtractFn typeFn) {
       return writeBuilder().setDocToBulk(getDocToBulk().withTypeFn(typeFn)).build();
     }
 
-    /** Refer to {@link DocToBulk#withDocVersionFn} */
+    /** Refer to {@link DocToBulk#withDocVersionFn}. */
     public Write withDocVersionFn(FieldValueExtractFn docVersionFn) {
       return writeBuilder().setDocToBulk(getDocToBulk().withDocVersionFn(docVersionFn)).build();
     }
 
-    /** Refer to {@link DocToBulk#withDocVersionType} */
+    /** Refer to {@link DocToBulk#withDocVersionType}. */
     public Write withDocVersionType(String docVersionType) {
       return writeBuilder().setDocToBulk(getDocToBulk().withDocVersionType(docVersionType)).build();
     }
 
-    /** Refer to {@link DocToBulk#withUsePartialUpdate} */
+    /** Refer to {@link DocToBulk#withUsePartialUpdate}. */
     public Write withUsePartialUpdate(boolean usePartialUpdate) {
       return writeBuilder()
           .setDocToBulk(getDocToBulk().withUsePartialUpdate(usePartialUpdate))
           .build();
     }
 
-    /** Refer to {@link DocToBulk#withUpsertScript} */
+    /** Refer to {@link DocToBulk#withUpsertScript}. */
     public Write withUpsertScript(String source) {
       return writeBuilder().setDocToBulk(getDocToBulk().withUpsertScript(source)).build();
     }
 
-    /** Refer to {@link DocToBulk#withBackendVersion} */
+    /** Refer to {@link DocToBulk#withBackendVersion}. */
     public Write withBackendVersion(int backendVersion) {
       return writeBuilder().setDocToBulk(getDocToBulk().withBackendVersion(backendVersion)).build();
     }
 
-    /** Refer to {@link DocToBulk#withIsDeleteFn} */
+    /** Refer to {@link DocToBulk#withIsDeleteFn}. */
     public Write withIsDeleteFn(Write.BooleanFieldValueExtractFn isDeleteFn) {
       return writeBuilder().setDocToBulk(getDocToBulk().withIsDeleteFn(isDeleteFn)).build();
     }
     // End building Doc2Bulk
 
-    /** Refer to {@link BulkIO#withConnectionConfiguration} */
+    /** Refer to {@link BulkIO#withConnectionConfiguration}. */
     public Write withConnectionConfiguration(ConnectionConfiguration connectionConfiguration) {
       checkArgument(connectionConfiguration != null, "connectionConfiguration can not be null");
 
@@ -1560,52 +1562,52 @@ public class ElasticsearchIO {
           .build();
     }
 
-    /** Refer to {@link BulkIO#withMaxBatchSize} */
+    /** Refer to {@link BulkIO#withMaxBatchSize}. */
     public Write withMaxBatchSize(long batchSize) {
       return writeBuilder().setBulkIO(getBulkIO().withMaxBatchSize(batchSize)).build();
     }
 
-    /** Refer to {@link BulkIO#withMaxBatchSizeBytes} */
+    /** Refer to {@link BulkIO#withMaxBatchSizeBytes}. */
     public Write withMaxBatchSizeBytes(long batchSizeBytes) {
       return writeBuilder().setBulkIO(getBulkIO().withMaxBatchSizeBytes(batchSizeBytes)).build();
     }
 
-    /** Refer to {@link BulkIO#withRetryConfiguration} */
+    /** Refer to {@link BulkIO#withRetryConfiguration}. */
     public Write withRetryConfiguration(RetryConfiguration retryConfiguration) {
       return writeBuilder()
           .setBulkIO(getBulkIO().withRetryConfiguration(retryConfiguration))
           .build();
     }
 
-    /** Refer to {@link BulkIO#withIgnoreVersionConflicts} */
+    /** Refer to {@link BulkIO#withIgnoreVersionConflicts}. */
     public Write withIgnoreVersionConflicts(boolean ignoreVersionConflicts) {
       return writeBuilder()
           .setBulkIO(getBulkIO().withIgnoreVersionConflicts(ignoreVersionConflicts))
           .build();
     }
 
-    /** Refer to {@link BulkIO#withUseStatefulBatches} */
+    /** Refer to {@link BulkIO#withUseStatefulBatches}. */
     public Write withUseStatefulBatches(boolean useStatefulBatches) {
       return writeBuilder()
           .setBulkIO(getBulkIO().withUseStatefulBatches(useStatefulBatches))
           .build();
     }
 
-    /** Refer to {@link BulkIO#withMaxBufferingDuration} */
+    /** Refer to {@link BulkIO#withMaxBufferingDuration}. */
     public Write withMaxBufferingDuration(Duration maxBufferingDuration) {
       return writeBuilder()
           .setBulkIO(getBulkIO().withMaxBufferingDuration(maxBufferingDuration))
           .build();
     }
 
-    /** Refer to {@link BulkIO#withMaxParallelRequestsPerWindow} */
+    /** Refer to {@link BulkIO#withMaxParallelRequestsPerWindow}. */
     public Write withMaxParallelRquestsPerWindow(int maxParallelRquestsPerWindow) {
       return writeBuilder()
           .setBulkIO(getBulkIO().withMaxParallelRequestsPerWindow(maxParallelRquestsPerWindow))
           .build();
     }
 
-    /** Refer to {@link BulkIO#withAllowableResponseErrors} */
+    /** Refer to {@link BulkIO#withAllowableResponseErrors}. */
     public Write withAllowableResponseErrors(@Nullable Set<String> allowableResponseErrors) {
       if (allowableResponseErrors == null) {
         allowableResponseErrors = new HashSet<>();
@@ -1854,8 +1856,8 @@ public class ElasticsearchIO {
 
     static class BulkIOBundleFn extends BulkIOBaseFn<String> {
       @VisibleForTesting
-      BulkIOBundleFn(BulkIO _spec) {
-        this.spec = _spec;
+      BulkIOBundleFn(BulkIO bulkSpec) {
+        this.spec = bulkSpec;
       }
 
       @ProcessElement
@@ -1870,8 +1872,8 @@ public class ElasticsearchIO {
      */
     static class BulkIOStatefulFn extends BulkIOBaseFn<KV<Integer, Iterable<String>>> {
       @VisibleForTesting
-      BulkIOStatefulFn(BulkIO _spec) {
-        this.spec = _spec;
+      BulkIOStatefulFn(BulkIO bulkSpec) {
+        this.spec = bulkSpec;
       }
 
       @ProcessElement
