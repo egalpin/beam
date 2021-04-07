@@ -261,18 +261,18 @@ class ElasticsearchIOTestCommon implements Serializable {
 
   void testWriteWithErrors() throws Exception {
     Write write =
-      ElasticsearchIO.write()
-        .withConnectionConfiguration(connectionConfiguration)
-        .withMaxBatchSize(BATCH_SIZE);
+        ElasticsearchIO.write()
+            .withConnectionConfiguration(connectionConfiguration)
+            .withMaxBatchSize(BATCH_SIZE);
     List<String> input =
-      ElasticsearchIOTestUtils.createDocuments(
-          numDocs, ElasticsearchIOTestUtils.InjectionMode.INJECT_SOME_INVALID_DOCS);
+        ElasticsearchIOTestUtils.createDocuments(
+            numDocs, ElasticsearchIOTestUtils.InjectionMode.INJECT_SOME_INVALID_DOCS);
 
     List<String> serializedInput = new ArrayList<>();
     for (String doc : input) {
       serializedInput.add(
           DocToBulk.createBulkApiEntity(
-            write.getDocToBulk(), doc, getBackendVersion(connectionConfiguration)));
+              write.getDocToBulk(), doc, getBackendVersion(connectionConfiguration)));
     }
     expectedException.expect(isA(IOException.class));
     expectedException.expectMessage(

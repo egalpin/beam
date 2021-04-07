@@ -1476,9 +1476,7 @@ public class ElasticsearchIO {
               spec.getIndexFn() != null
                   ? lowerCaseOrNull(spec.getIndexFn().apply(parsedDocument))
                   : null,
-              spec.getTypeFn() != null
-                  ? spec.getTypeFn().apply(parsedDocument)
-                  : null,
+              spec.getTypeFn() != null ? spec.getTypeFn().apply(parsedDocument) : null,
               spec.getIdFn() != null ? spec.getIdFn().apply(parsedDocument) : null,
               (spec.getUsePartialUpdate()
                       || (spec.getUpsertScript() != null && !spec.getUpsertScript().isEmpty()))
