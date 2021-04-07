@@ -1624,7 +1624,8 @@ public class ElasticsearchIO {
     static final String RETRY_ATTEMPT_LOG = "Error writing to Elasticsearch. Retry attempt[%d]";
 
     @VisibleForTesting
-    static final String RETRY_FAILED_LOG = "Error writing to ES after %d attempt(s). No more attempts allowed";
+    static final String RETRY_FAILED_LOG =
+        "Error writing to ES after %d attempt(s). No more attempts allowed";
 
     abstract @Nullable ConnectionConfiguration getConnectionConfiguration();
 
