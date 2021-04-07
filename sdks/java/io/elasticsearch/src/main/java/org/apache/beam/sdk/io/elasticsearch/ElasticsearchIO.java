@@ -336,6 +336,63 @@ public class ElasticsearchIO {
     }
 
     /**
+     * Creates a new Elasticsearch connection configuration with no default type.
+     *
+     * @param addresses list of addresses of Elasticsearch nodes
+     * @param index the index toward which the requests will be issued
+     * @return the connection configuration object
+     */
+    public static ConnectionConfiguration create(String[] addresses, String index) {
+      checkArgument(addresses != null, "addresses can not be null");
+      checkArgument(addresses.length > 0, "addresses can not be empty");
+      checkArgument(index != null, "index can not be null");
+      return new AutoValue_ElasticsearchIO_ConnectionConfiguration.Builder()
+          .setAddresses(Arrays.asList(addresses))
+          .setIndex(index)
+          .setType("")
+          .setTrustSelfSignedCerts(false)
+          .build();
+    }
+
+    /**
+     * Creates a new Elasticsearch connection configuration with no default index nor type.
+     *
+     * @param addresses list of addresses of Elasticsearch nodes
+     * @return the connection configuration object
+     */
+    public static ConnectionConfiguration create(String[] addresses) {
+      checkArgument(addresses != null, "addresses can not be null");
+      checkArgument(addresses.length > 0, "addresses can not be empty");
+      return new AutoValue_ElasticsearchIO_ConnectionConfiguration.Builder()
+          .setAddresses(Arrays.asList(addresses))
+          .setIndex("")
+          .setType("")
+          .setTrustSelfSignedCerts(false)
+          .build();
+    }
+
+    /**
+     * Generates the bulk API endpoint based on the set values.
+     *
+     * <p>Based on ConnectionConfiguration constructors, we know that one of the following is true:
+     * - index and type are non-empty strings - index is non-empty string, type is empty string -
+     * index and type are empty string
+     *
+     * <p>Valid endpoints therefore include: - /_bulk - /<index>/_bulk - /<index>/<type>/_bulk
+     */
+    public String getBulkEndPoint() {
+      List<String> endPointComponents = Arrays.asList(getIndex(), getType(), "_bulk");
+      StringBuilder sb = new StringBuilder();
+      for (String endPointComponent : endPointComponents) {
+        if (endPointComponent == null || endPointComponent.equals("")) {
+          continue;
+        }
+        sb.append("/").append(endPointComponent);
+      }
+      return sb.toString();
+    }
+
+    /**
      * If Elasticsearch authentication is enabled, provide the username.
      *
      * @param username the username used to authenticate to Elasticsearch
@@ -1957,10 +2014,13 @@ public class ElasticsearchIO {
 
         Response response = null;
         HttpEntity responseEntity = null;
-        // Elasticsearch will default to the index/type provided here if none are set in the
-        // document meta (i.e. using ElasticsearchIO$DocToBulk#withIndexFn and
+
+        // Elasticsearch will default to the index/type provided the {@link
+        // ConnectionConfiguration} if none are set in the document meta (i.e.
+        // using ElasticsearchIO$DocToBulk#withIndexFn and
         // ElasticsearchIO$DocToBulk#withTypeFn options)
-        String endPoint = "/_bulk";
+        String endPoint = spec.getConnectionConfiguration().getBulkEndPoint();
+
         HttpEntity requestBody =
             new NStringEntity(bulkRequest.toString(), ContentType.APPLICATION_JSON);
         try {
