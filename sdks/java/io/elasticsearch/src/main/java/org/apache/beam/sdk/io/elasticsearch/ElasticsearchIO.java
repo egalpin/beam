@@ -1403,12 +1403,10 @@ public class ElasticsearchIO {
         if (value.routing != null) {
           gen.writeStringField("routing", value.routing);
         }
-        if (value.retryOnConflict != null
-            && (value.backendVersion == 2 || value.backendVersion == 5)) {
+        if (value.retryOnConflict != null && value.backendVersion <= 6) {
           gen.writeNumberField("_retry_on_conflict", value.retryOnConflict);
         }
-        if (value.retryOnConflict != null
-            && (value.backendVersion == 6 || value.backendVersion == 7)) {
+        if (value.retryOnConflict != null && value.backendVersion >= 7) {
           gen.writeNumberField("retry_on_conflict", value.retryOnConflict);
         }
         if (value.version != null) {
@@ -1479,7 +1477,7 @@ public class ElasticsearchIO {
                   ? lowerCaseOrNull(spec.getIndexFn().apply(parsedDocument))
                   : null,
               spec.getTypeFn() != null
-                  ? lowerCaseOrNull(spec.getTypeFn().apply(parsedDocument))
+                  ? spec.getTypeFn().apply(parsedDocument)
                   : null,
               spec.getIdFn() != null ? spec.getIdFn().apply(parsedDocument) : null,
               (spec.getUsePartialUpdate()
