@@ -260,9 +260,20 @@ class ElasticsearchIOTestCommon implements Serializable {
   }
 
   void testWriteWithErrors() throws Exception {
+    Write write =
+      ElasticsearchIO.write()
+        .withConnectionConfiguration(connectionConfiguration)
+        .withMaxBatchSize(BATCH_SIZE);
     List<String> input =
-        ElasticsearchIOTestUtils.createDocuments(
-            numDocs, ElasticsearchIOTestUtils.InjectionMode.INJECT_SOME_INVALID_DOCS);
+      ElasticsearchIOTestUtils.createDocuments(
+          numDocs, ElasticsearchIOTestUtils.InjectionMode.INJECT_SOME_INVALID_DOCS);
+
+    List<String> serializedInput = new ArrayList<>();
+    for (String doc : input) {
+      serializedInput.add(
+          DocToBulk.createBulkApiEntity(
+            write.getDocToBulk(), doc, getBackendVersion(connectionConfiguration)));
+    }
     expectedException.expect(isA(IOException.class));
     expectedException.expectMessage(
         new CustomMatcher<String>("RegExp matcher") {
@@ -283,14 +294,13 @@ class ElasticsearchIOTestCommon implements Serializable {
           }
         });
 
-    pipeline
-        .apply(Create.of(input))
-        .apply(
-            ElasticsearchIO.write()
-                .withConnectionConfiguration(connectionConfiguration)
-                .withMaxBatchSize(BATCH_SIZE)
-                .withUseStatefulBatches(true));
-    pipeline.run();
+    // write bundles size is the runner decision, we cannot force a bundle size,
+    // so we test the Writer as a DoFn outside of a runner.
+    try (DoFnTester<String, Void> fnTester =
+        DoFnTester.of(new BulkIO.BulkIOBundleFn(write.getBulkIO()))) {
+      // inserts into Elasticsearch
+      fnTester.processBundle(serializedInput);
+    }
   }
 
   void testWriteWithMaxBatchSize() throws Exception {
