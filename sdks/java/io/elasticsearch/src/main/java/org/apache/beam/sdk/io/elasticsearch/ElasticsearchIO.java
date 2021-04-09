@@ -375,10 +375,20 @@ public class ElasticsearchIO {
      * Generates the bulk API endpoint based on the set values.
      *
      * <p>Based on ConnectionConfiguration constructors, we know that one of the following is true:
-     * - index and type are non-empty strings - index is non-empty string, type is empty string -
-     * index and type are empty string
      *
-     * <p>Valid endpoints therefore include: - /_bulk - /<index>/_bulk - /<index>/<type>/_bulk
+     * <ul>
+     *     <li>index and type are non-empty strings</li>
+     *     <li>index is non-empty string, type is empty string</li>
+     *     <li>index and type are empty string</li>
+     * </ul>
+     *
+     * <p>Valid endpoints therefore include:
+     *
+     * <ul>
+     *     <li>/_bulk</li>
+     *     <li>/index_name/_bulk</li>
+     *     <li>/index_name/type_name/_bulk</li>
+     * </ul>
      */
     public String getBulkEndPoint() {
       List<String> endPointComponents = Arrays.asList(getIndex(), getType(), "_bulk");
