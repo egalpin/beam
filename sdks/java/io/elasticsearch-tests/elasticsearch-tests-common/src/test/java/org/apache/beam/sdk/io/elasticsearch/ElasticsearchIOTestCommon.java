@@ -259,6 +259,14 @@ class ElasticsearchIOTestCommon implements Serializable {
     executeWriteTest(write);
   }
 
+  void testWriteStateful() throws Exception {
+    Write write =
+        ElasticsearchIO.write()
+            .withConnectionConfiguration(connectionConfiguration)
+            .withUseStatefulBatches(true);
+    executeWriteTest(write);
+  }
+
   void testWriteWithErrors() throws Exception {
     Write write =
         ElasticsearchIO.write()
@@ -296,8 +304,8 @@ class ElasticsearchIOTestCommon implements Serializable {
 
     // write bundles size is the runner decision, we cannot force a bundle size,
     // so we test the Writer as a DoFn outside of a runner.
-    try (DoFnTester<String, Void> fnTester =
-        DoFnTester.of(new BulkIO.BulkIOBundleFn(write.getBulkIO()))) {
+    try (DoFnTester<Iterable<String>, Void> fnTester =
+        DoFnTester.of(new BulkIO.BulkIOFn(write.getBulkIO()))) {
       // inserts into Elasticsearch
       fnTester.processBundle(serializedInput);
     }
@@ -311,8 +319,8 @@ class ElasticsearchIOTestCommon implements Serializable {
 
     // write bundles size is the runner decision, we cannot force a bundle size,
     // so we test the Writer as a DoFn outside of a runner.
-    try (DoFnTester<String, Void> fnTester =
-        DoFnTester.of(new BulkIO.BulkIOBundleFn(write.getBulkIO()))) {
+    try (DoFnTester<Iterable<String>, Void> fnTester =
+        DoFnTester.of(new BulkIO.BulkIOFn(write.getBulkIO()))) {
       List<String> input =
           ElasticsearchIOTestUtils.createDocuments(
               numDocs, ElasticsearchIOTestUtils.InjectionMode.DO_NOT_INJECT_INVALID_DOCS);
@@ -326,7 +334,9 @@ class ElasticsearchIOTestCommon implements Serializable {
       long numDocsProcessed = 0;
       long numDocsInserted = 0;
       for (String document : serializedInput) {
-        fnTester.processElement(document);
+        // It's a tad strange to iterate over a list and then make a list of each element, but
+        // this allows for 1-by-1 DoFn processing and data validation as needed
+        fnTester.processElement(Collections.singletonList(document));
         numDocsProcessed++;
         // test every 100 docs to avoid overloading ES
         if ((numDocsProcessed % 100) == 0) {
@@ -360,8 +370,8 @@ class ElasticsearchIOTestCommon implements Serializable {
             .withMaxBatchSizeBytes(BATCH_SIZE_BYTES);
     // write bundles size is the runner decision, we cannot force a bundle size,
     // so we test the Writer as a DoFn outside of a runner.
-    try (DoFnTester<String, Void> fnTester =
-        DoFnTester.of(new BulkIO.BulkIOBundleFn(write.getBulkIO()))) {
+    try (DoFnTester<Iterable<String>, Void> fnTester =
+        DoFnTester.of(new BulkIO.BulkIOFn(write.getBulkIO()))) {
       List<String> input =
           ElasticsearchIOTestUtils.createDocuments(
               numDocs, ElasticsearchIOTestUtils.InjectionMode.DO_NOT_INJECT_INVALID_DOCS);
@@ -376,7 +386,9 @@ class ElasticsearchIOTestCommon implements Serializable {
       long numDocsInserted = 0;
       long batchInserted = 0;
       for (String document : serializedInput) {
-        fnTester.processElement(document);
+        // It's a tad strange to iterate over a list and then make a list of each element, but
+        // this allows for 1-by-1 DoFn processing and data validation as needed
+        fnTester.processElement(Collections.singletonList(document));
         numDocsProcessed++;
         sizeProcessed += document.getBytes(StandardCharsets.UTF_8).length;
         // test every 40 docs to avoid overloading ES

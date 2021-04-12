@@ -59,9 +59,10 @@ import org.apache.beam.sdk.options.PipelineOptions;
 import org.apache.beam.sdk.options.ValueProvider;
 import org.apache.beam.sdk.transforms.DoFn;
 import org.apache.beam.sdk.transforms.GroupIntoBatches;
+import org.apache.beam.sdk.transforms.MapElements;
 import org.apache.beam.sdk.transforms.PTransform;
 import org.apache.beam.sdk.transforms.ParDo;
-import org.apache.beam.sdk.transforms.Reshuffle;
+import org.apache.beam.sdk.transforms.Reshuffle.AssignShardFn;
 import org.apache.beam.sdk.transforms.SerializableFunction;
 import org.apache.beam.sdk.transforms.display.DisplayData;
 import org.apache.beam.sdk.util.BackOff;
@@ -72,6 +73,7 @@ import org.apache.beam.sdk.values.KV;
 import org.apache.beam.sdk.values.PBegin;
 import org.apache.beam.sdk.values.PCollection;
 import org.apache.beam.sdk.values.PDone;
+import org.apache.beam.sdk.values.TypeDescriptors;
 import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.annotations.VisibleForTesting;
 import org.apache.http.HttpEntity;
 import org.apache.http.HttpHost;
@@ -87,6 +89,7 @@ import org.apache.http.impl.client.BasicCredentialsProvider;
 import org.apache.http.nio.conn.ssl.SSLIOSessionStrategy;
 import org.apache.http.nio.entity.NStringEntity;
 import org.apache.http.ssl.SSLContexts;
+import org.checkerframework.checker.nullness.qual.NonNull;
 import org.checkerframework.checker.nullness.qual.Nullable;
 import org.elasticsearch.client.Request;
 import org.elasticsearch.client.Response;
@@ -377,17 +380,17 @@ public class ElasticsearchIO {
      * <p>Based on ConnectionConfiguration constructors, we know that one of the following is true:
      *
      * <ul>
-     *     <li>index and type are non-empty strings</li>
-     *     <li>index is non-empty string, type is empty string</li>
-     *     <li>index and type are empty string</li>
+     *   <li>index and type are non-empty strings
+     *   <li>index is non-empty string, type is empty string
+     *   <li>index and type are empty string
      * </ul>
      *
      * <p>Valid endpoints therefore include:
      *
      * <ul>
-     *     <li>/_bulk</li>
-     *     <li>/index_name/_bulk</li>
-     *     <li>/index_name/type_name/_bulk</li>
+     *   <li>/_bulk
+     *   <li>/index_name/_bulk
+     *   <li>/index_name/type_name/_bulk
      * </ul>
      */
     public String getBulkEndPoint() {
@@ -1317,7 +1320,7 @@ public class ElasticsearchIO {
      * the batch will fail and the exception propagated. Incompatible with update operations and
      * should only be used with withUsePartialUpdate(false)
      *
-     * @param docVersionType the version type to use, one of {@value #VERSION_TYPES}
+     * @param docVersionType the version type to use, one of {@value ElasticsearchIO#VERSION_TYPES}
      * @return the {@link DocToBulk} with the doc version type set
      */
     public DocToBulk withDocVersionType(String docVersionType) {
@@ -1905,51 +1908,30 @@ public class ElasticsearchIO {
         if (getMaxBufferingDuration() != null) {
           groupIntoBatches = groupIntoBatches.withMaxBufferingDuration(getMaxBufferingDuration());
         }
+        input
+            .apply(ParDo.of(new AssignShardFn<>(getMaxParallelRequestsPerWindow())))
+            .apply(groupIntoBatches)
+            .apply(
+                "Remove key no longer needed",
+                MapElements.into(TypeDescriptors.iterables(TypeDescriptors.strings()))
+                    .via(KV::getValue))
+            .apply(ParDo.of(new BulkIOFn(this)));
+      } else {
 
         input
-            .apply(ParDo.of(new Reshuffle.AssignShardFn<>(getMaxParallelRequestsPerWindow())))
-            .apply(groupIntoBatches)
-            .apply(ParDo.of(new BulkIOStatefulFn(this)));
-      } else {
-        input.apply(ParDo.of(new BulkIOBundleFn(this)));
+            .apply(
+                "Make elements iterable",
+                MapElements.into(TypeDescriptors.iterables(TypeDescriptors.strings()))
+                    .via(Collections::singletonList))
+            .apply(ParDo.of(new BulkIOFn(this)));
       }
+
       return PDone.in(input.getPipeline());
-    }
-
-    static class BulkIOBundleFn extends BulkIOBaseFn<String> {
-      @VisibleForTesting
-      BulkIOBundleFn(BulkIO bulkSpec) {
-        this.spec = bulkSpec;
-      }
-
-      @ProcessElement
-      public void processElement(ProcessContext context) throws Exception {
-        String bulkApiEntity = context.element();
-        addAndMaybeFlush(bulkApiEntity);
-      }
-    }
-
-    /*
-    Intended for use in conjunction with {@link GroupIntoBatches}
-     */
-    static class BulkIOStatefulFn extends BulkIOBaseFn<KV<Integer, Iterable<String>>> {
-      @VisibleForTesting
-      BulkIOStatefulFn(BulkIO bulkSpec) {
-        this.spec = bulkSpec;
-      }
-
-      @ProcessElement
-      public void processElement(ProcessContext context) throws Exception {
-        Iterable<String> bulkApiEntities = context.element().getValue();
-        for (String bulkApiEntity : bulkApiEntities) {
-          addAndMaybeFlush(bulkApiEntity);
-        }
-      }
     }
 
     /** {@link DoFn} to for the {@link BulkIO} transform. */
     @VisibleForTesting
-    private abstract static class BulkIOBaseFn<T> extends DoFn<T, Void> {
+    static class BulkIOFn extends DoFn<Iterable<String>, Void> {
       private static final Duration RETRY_INITIAL_BACKOFF = Duration.standardSeconds(5);
 
       private transient FluentBackoff retryBackoff;
@@ -1958,6 +1940,11 @@ public class ElasticsearchIO {
       private transient RestClient restClient;
       protected ArrayList<String> batch;
       long currentBatchSizeBytes;
+
+      @VisibleForTesting
+      BulkIOFn(BulkIO bulkSpec) {
+        this.spec = bulkSpec;
+      }
 
       @Setup
       public void setup() throws IOException {
@@ -1987,6 +1974,14 @@ public class ElasticsearchIO {
       public void finishBundle(FinishBundleContext context)
           throws IOException, InterruptedException {
         flushBatch();
+      }
+
+      @ProcessElement
+      public void processElement(@NonNull @Element Iterable<String> bulkApiEntities)
+          throws Exception {
+        for (String bulkApiEntity : bulkApiEntities) {
+          addAndMaybeFlush(bulkApiEntity);
+        }
       }
 
       protected void addAndMaybeFlush(String bulkApiEntity)
