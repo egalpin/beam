@@ -1977,7 +1977,7 @@ public class ElasticsearchIO {
       }
 
       @ProcessElement
-      public void processElement(@NonNull @Element Iterable<String> bulkApiEntities)
+      public void processElement(@Element @NonNull Iterable<String> bulkApiEntities)
           throws Exception {
         for (String bulkApiEntity : bulkApiEntities) {
           addAndMaybeFlush(bulkApiEntity);
