@@ -240,24 +240,27 @@ public class ElasticsearchIO {
           continue;
         }
 
+        // N.B. An empty-string within the allowedErrorTypes Set implies all errors are allowed.
         String type = error.path("type").asText();
-        if (allowedErrorTypes != null && allowedErrorTypes.contains(type)) {
+        String reason = error.path("reason").asText();
+        String docId = item.findValue("_id").asText();
+        JsonNode causedBy = error.path("caused_by"); // May not be present
+        String cbReason = causedBy.path("reason").asText();
+        String cbType = causedBy.path("type").asText();
+
+        if (allowedErrorTypes != null
+            && (allowedErrorTypes.contains(type) || allowedErrorTypes.contains(cbType))) {
           continue;
         }
 
         // 'error' field is not null, and the error is not being ignored.
         numErrors++;
 
-        String reason = error.path("reason").asText();
-        String docId = item.findValue("_id").asText();
         errorMessages.append(String.format("%nDocument id %s: %s (%s)", docId, reason, type));
 
-        JsonNode causedBy = error.get("caused_by");
-        if (causedBy == null) {
+        if (causedBy.isMissingNode()) {
           continue;
         }
-        String cbReason = causedBy.path("reason").asText();
-        String cbType = causedBy.path("type").asText();
         errorMessages.append(String.format("%nCaused by: %s (%s)", cbReason, cbType));
       }
       if (numErrors > 0) {

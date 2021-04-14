@@ -156,6 +156,11 @@ public class ElasticsearchIOTest extends ESIntegTestCase implements Serializable
   }
 
   @Test
+  public void testWriteWithAllowableErrors() throws Exception {
+    elasticsearchIOTestCommon.testWriteWithAllowedErrors();
+  }
+
+  @Test
   public void testWriteWithMaxBatchSize() throws Exception {
     elasticsearchIOTestCommon.testWriteWithMaxBatchSize();
   }
