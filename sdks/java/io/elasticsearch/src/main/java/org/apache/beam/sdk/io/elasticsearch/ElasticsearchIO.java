@@ -220,7 +220,7 @@ public class ElasticsearchIO {
     return mapper.readValue(responseEntity.getContent(), JsonNode.class);
   }
 
-  static void checkForErrors(HttpEntity responseEntity, Set<String> allowedErrorTypes)
+  static void checkForErrors(HttpEntity responseEntity, @Nullable Set<String> allowedErrorTypes)
       throws IOException {
 
     JsonNode searchResult = parseResponse(responseEntity);
@@ -237,32 +237,27 @@ public class ElasticsearchIO {
       // some items present in bulk might have errors, concatenate error messages
       for (JsonNode item : items) {
         JsonNode error = item.findValue("error");
-        if (error == null) {
-          continue;
+        if (error != null) {
+          // N.B. An empty-string within the allowedErrorTypes Set implies all errors are allowed.
+          String type = error.path("type").asText();
+          String reason = error.path("reason").asText();
+          String docId = item.findValue("_id").asText();
+          JsonNode causedBy = error.path("caused_by"); // May not be present
+          String cbReason = causedBy.path("reason").asText();
+          String cbType = causedBy.path("type").asText();
+
+          if (allowedErrorTypes == null
+              || (!allowedErrorTypes.contains(type) && !allowedErrorTypes.contains(cbType))) {
+            // 'error' and 'causedBy` fields are not null, and the error is not being ignored.
+            numErrors++;
+
+            errorMessages.append(String.format("%nDocument id %s: %s (%s)", docId, reason, type));
+
+            if (!causedBy.isMissingNode()) {
+              errorMessages.append(String.format("%nCaused by: %s (%s)", cbReason, cbType));
+            }
+          }
         }
-
-        // N.B. An empty-string within the allowedErrorTypes Set implies all errors are allowed.
-        String type = error.path("type").asText();
-        String reason = error.path("reason").asText();
-        String docId = item.findValue("_id").asText();
-        JsonNode causedBy = error.path("caused_by"); // May not be present
-        String cbReason = causedBy.path("reason").asText();
-        String cbType = causedBy.path("type").asText();
-
-        if (allowedErrorTypes != null
-            && (allowedErrorTypes.contains(type) || allowedErrorTypes.contains(cbType))) {
-          continue;
-        }
-
-        // 'error' field is not null, and the error is not being ignored.
-        numErrors++;
-
-        errorMessages.append(String.format("%nDocument id %s: %s (%s)", docId, reason, type));
-
-        if (causedBy.isMissingNode()) {
-          continue;
-        }
-        errorMessages.append(String.format("%nCaused by: %s (%s)", cbReason, cbType));
       }
       if (numErrors > 0) {
         throw new IOException(errorMessages.toString());
