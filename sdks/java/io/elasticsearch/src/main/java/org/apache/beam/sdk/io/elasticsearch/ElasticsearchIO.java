@@ -377,25 +377,25 @@ public class ElasticsearchIO {
      * <p>Based on ConnectionConfiguration constructors, we know that one of the following is true:
      *
      * <ul>
-     *     <li>index and type are non-empty strings</li>
-     *     <li>index is non-empty string, type is empty string</li>
-     *     <li>index and type are empty string</li>
+     *   <li>index and type are non-empty strings
+     *   <li>index is non-empty string, type is empty string
+     *   <li>index and type are empty string
      * </ul>
      *
      * <p>Valid endpoints therefore include:
      *
      * <ul>
-     *     <li>/_bulk</li>
-     *     <li>/index_name/_bulk</li>
-     *     <li>/index_name/type_name/_bulk</li>
+     *   <li>/_bulk
+     *   <li>/index_name/_bulk
+     *   <li>/index_name/type_name/_bulk
      * </ul>
      */
     public String getBulkEndPoint() {
       StringBuilder sb = new StringBuilder();
-      if (!Strings.isNullOrEmpty(getIndex())){
+      if (!Strings.isNullOrEmpty(getIndex())) {
         sb.append("/").append(getIndex());
       }
-      if (!Strings.isNullOrEmpty(getType())){
+      if (!Strings.isNullOrEmpty(getType())) {
         sb.append("/").append(getType());
       }
       sb.append("/").append("_bulk");
@@ -1530,9 +1530,9 @@ public class ElasticsearchIO {
    * A {@link PTransform} writing data to Elasticsearch.
    *
    * <p>This {@link PTransform} acts as a convenience wrapper for doing both document to bulk API
-   * serialization as well as batching those Bulk API entities and writing them to an
-   * Elasticsearch cluster. This class is effectively a thin proxy for DocToBulk->BulkIO all-in-one
-   * for convenience and backward compatibility.
+   * serialization as well as batching those Bulk API entities and writing them to an Elasticsearch
+   * cluster. This class is effectively a thin proxy for DocToBulk->BulkIO all-in-one for
+   * convenience and backward compatibility.
    */
   public static class Write extends PTransform<PCollection<String>, PDone> {
     public interface FieldValueExtractFn extends SerializableFunction<JsonNode, String> {}
@@ -1540,19 +1540,19 @@ public class ElasticsearchIO {
     public interface BooleanFieldValueExtractFn extends SerializableFunction<JsonNode, Boolean> {}
 
     private DocToBulk docToBulk =
-      new AutoValue_ElasticsearchIO_DocToBulk.Builder()
-          .setUsePartialUpdate(false) // default is document upsert
-          .build();
+        new AutoValue_ElasticsearchIO_DocToBulk.Builder()
+            .setUsePartialUpdate(false) // default is document upsert
+            .build();
 
     private BulkIO bulkIO =
-      new AutoValue_ElasticsearchIO_BulkIO.Builder()
-          // advised default starting batch size in ES docs
-          .setMaxBatchSize(1000L)
-          // advised default starting batch size in ES docs
-          .setMaxBatchSizeBytes(5L * 1024L * 1024L)
-          .setUseStatefulBatches(false)
-          .setMaxParallelRequestsPerWindow(1)
-          .build();
+        new AutoValue_ElasticsearchIO_BulkIO.Builder()
+            // advised default starting batch size in ES docs
+            .setMaxBatchSize(1000L)
+            // advised default starting batch size in ES docs
+            .setMaxBatchSizeBytes(5L * 1024L * 1024L)
+            .setUseStatefulBatches(false)
+            .setMaxParallelRequestsPerWindow(1)
+            .build();
 
     public DocToBulk getDocToBulk() {
       return docToBulk;
@@ -1690,10 +1690,11 @@ public class ElasticsearchIO {
     }
   }
 
-  /** A {@link PTransform} writing Bulk API entities created by {@link ElasticsearchIO.DocToBulk}
-   *  to an Elasticsearch cluster. Typically, using {@link ElasticsearchIO.Write} is preferred,
-   *  whereas using {@link ElasticsearchIO.DocToBulk} and BulkIO separately is for advanced use
-   *  cases such as mirroring data to multiple clusters or data lakes without recomputation.
+  /**
+   * A {@link PTransform} writing Bulk API entities created by {@link ElasticsearchIO.DocToBulk} to
+   * an Elasticsearch cluster. Typically, using {@link ElasticsearchIO.Write} is preferred, whereas
+   * using {@link ElasticsearchIO.DocToBulk} and BulkIO separately is for advanced use cases such as
+   * mirroring data to multiple clusters or data lakes without recomputation.
    */
   @AutoValue
   public abstract static class BulkIO extends PTransform<PCollection<String>, PDone> {
@@ -2018,10 +2019,10 @@ public class ElasticsearchIO {
         // RestClient#performRequest only throws wrapped IOException so we must inspect the
         // exception cause to determine if the exception is likely transient i.e. retryable or
         // not.
-        return t.getCause() instanceof ConnectTimeoutException ||
-            t.getCause() instanceof SocketTimeoutException ||
-            t.getCause() instanceof ConnectionClosedException ||
-            t.getCause() instanceof ConnectException;
+        return t.getCause() instanceof ConnectTimeoutException
+            || t.getCause() instanceof SocketTimeoutException
+            || t.getCause() instanceof ConnectionClosedException
+            || t.getCause() instanceof ConnectException;
       }
 
       private void flushBatch() throws IOException, InterruptedException {
@@ -2098,10 +2099,10 @@ public class ElasticsearchIO {
             response = restClient.performRequest(request);
             responseEntity = new BufferedHttpEntity(response.getEntity());
           } catch (java.io.IOException ex) {
-              if (isRetryableClientException(ex)) {
-                LOG.error("Caught ES timeout, retrying", ex);
-                continue;
-              }
+            if (isRetryableClientException(ex)) {
+              LOG.error("Caught ES timeout, retrying", ex);
+              continue;
+            }
           }
           // if response has no 429 errors
           if (!Objects.requireNonNull(spec.getRetryConfiguration())
