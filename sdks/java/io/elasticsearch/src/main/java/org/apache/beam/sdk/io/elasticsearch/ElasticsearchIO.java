@@ -75,6 +75,7 @@ import org.apache.beam.sdk.values.PBegin;
 import org.apache.beam.sdk.values.PCollection;
 import org.apache.beam.sdk.values.PDone;
 import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.annotations.VisibleForTesting;
+import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.base.Strings;
 import org.apache.http.ConnectionClosedException;
 import org.apache.http.HttpEntity;
 import org.apache.http.HttpHost;
@@ -393,14 +394,14 @@ public class ElasticsearchIO {
      * </ul>
      */
     public String getBulkEndPoint() {
-      List<String> endPointComponents = Arrays.asList(getIndex(), getType(), "_bulk");
       StringBuilder sb = new StringBuilder();
-      for (String endPointComponent : endPointComponents) {
-        if (endPointComponent == null || endPointComponent.equals("")) {
-          continue;
-        }
-        sb.append("/").append(endPointComponent);
+      if (!Strings.isNullOrEmpty(getIndex())){
+        sb.append("/").append(getIndex());
       }
+      if (!Strings.isNullOrEmpty(getType())){
+        sb.append("/").append(getType());
+      }
+      sb.append("/").append("_bulk");
       return sb.toString();
     }
 
