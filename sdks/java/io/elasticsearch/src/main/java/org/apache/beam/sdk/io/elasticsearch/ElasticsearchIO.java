@@ -206,10 +206,7 @@ public class ElasticsearchIO {
   }
 
   public static Write write() {
-    return new AutoValue_ElasticsearchIO_Write.Builder()
-        .setDocToBulk(docToBulk())
-        .setBulkIO(bulkIO())
-        .build();
+    return new Write();
   }
 
   private ElasticsearchIO() {}
@@ -1320,7 +1317,7 @@ public class ElasticsearchIO {
      * the batch will fail and the exception propagated. Incompatible with update operations and
      * should only be used with withUsePartialUpdate(false)
      *
-     * @param docVersionType the version type to use, one of {@value #VERSION_TYPES}
+     * @param docVersionType the version type to use, one of {@value VERSION_TYPES}
      * @return the {@link DocToBulk} with the doc version type set
      */
     public DocToBulk withDocVersionType(String docVersionType) {
@@ -1537,7 +1534,7 @@ public class ElasticsearchIO {
    * Elasticsearch cluster. This class is effectively a thin proxy for DocToBulk->BulkIO all-in-one
    * for convenience and backward compatibility.
    */
-  public abstract static class Write extends PTransform<PCollection<String>, PDone> {
+  public static class Write extends PTransform<PCollection<String>, PDone> {
     public interface FieldValueExtractFn extends SerializableFunction<JsonNode, String> {}
 
     public interface BooleanFieldValueExtractFn extends SerializableFunction<JsonNode, Boolean> {}
@@ -1689,11 +1686,15 @@ public class ElasticsearchIO {
 
     @Override
     public PDone expand(PCollection<String> input) {
-      input.apply(docToBulk).apply(bulkIO);
+      return input.apply(docToBulk).apply(bulkIO);
     }
   }
 
-  /** A {@link PTransform} writing data to Elasticsearch. */
+  /** A {@link PTransform} writing Bulk API entities created by {@link ElasticsearchIO.DocToBulk}
+   *  to an Elasticsearch cluster. Typically, using {@link ElasticsearchIO.Write} is preferred,
+   *  whereas using {@link ElasticsearchIO.DocToBulk} and BulkIO separately is for advanced use
+   *  cases such as mirroring data to multiple clusters or data lakes without recomputation.
+   */
   @AutoValue
   public abstract static class BulkIO extends PTransform<PCollection<String>, PDone> {
     @VisibleForTesting
@@ -2083,7 +2084,7 @@ public class ElasticsearchIO {
           String method, String endpoint, Map<String, String> params, HttpEntity requestBody)
           throws IOException, InterruptedException {
         Response response;
-        HttpEntity responseEntity;
+        HttpEntity responseEntity = null;
         Sleeper sleeper = Sleeper.DEFAULT;
         BackOff backoff = retryBackoff.backoff();
         int attempt = 0;
