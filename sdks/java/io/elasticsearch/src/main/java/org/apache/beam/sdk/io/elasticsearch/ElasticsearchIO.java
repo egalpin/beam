@@ -1530,139 +1530,151 @@ public class ElasticsearchIO {
   }
 
   /**
-   * A {@link PTransform} convenience wrapper for doing both document to bulk API serialization as
-   * well as batching those Bulk API entities and writing them to an Elasticsearch cluster. This
-   * class is effectively a thin proxy for DocToBulk->BulkIO all-in-one for convenience and backward
-   * compatibility.
+   * A {@link PTransform} writing data to Elasticsearch.
+   *
+   * <p>This {@link PTransform} acts as a convenience wrapper for doing both document to bulk API
+   * serialization as well as batching those Bulk API entities and writing them to an
+   * Elasticsearch cluster. This class is effectively a thin proxy for DocToBulk->BulkIO all-in-one
+   * for convenience and backward compatibility.
    */
-  @AutoValue
   public abstract static class Write extends PTransform<PCollection<String>, PDone> {
     public interface FieldValueExtractFn extends SerializableFunction<JsonNode, String> {}
 
     public interface BooleanFieldValueExtractFn extends SerializableFunction<JsonNode, Boolean> {}
 
-    public abstract DocToBulk getDocToBulk();
+    private DocToBulk docToBulk =
+      new AutoValue_ElasticsearchIO_DocToBulk.Builder()
+          .setUsePartialUpdate(false) // default is document upsert
+          .build();
 
-    public abstract BulkIO getBulkIO();
+    private BulkIO bulkIO =
+      new AutoValue_ElasticsearchIO_BulkIO.Builder()
+          // advised default starting batch size in ES docs
+          .setMaxBatchSize(1000L)
+          // advised default starting batch size in ES docs
+          .setMaxBatchSizeBytes(5L * 1024L * 1024L)
+          .setUseStatefulBatches(false)
+          .setMaxParallelRequestsPerWindow(1)
+          .build();
 
-    abstract Builder writeBuilder();
+    public DocToBulk getDocToBulk() {
+      return docToBulk;
+    }
 
-    @AutoValue.Builder
-    abstract static class Builder {
-      abstract Builder setDocToBulk(DocToBulk docToBulk);
-
-      abstract Builder setBulkIO(BulkIO bulkIO);
-
-      abstract Write build();
+    public BulkIO getBulkIO() {
+      return bulkIO;
     }
 
     // For building Doc2Bulk
     /** Refer to {@link DocToBulk#withIdFn}. */
     public Write withIdFn(FieldValueExtractFn idFn) {
-      return writeBuilder().setDocToBulk(getDocToBulk().withIdFn(idFn)).build();
+      docToBulk = docToBulk.withIdFn(idFn);
+      return this;
     }
 
     /** Refer to {@link DocToBulk#withIndexFn}. */
     public Write withIndexFn(FieldValueExtractFn indexFn) {
-      return writeBuilder().setDocToBulk(getDocToBulk().withIndexFn(indexFn)).build();
+      docToBulk = docToBulk.withIndexFn(indexFn);
+      return this;
     }
 
     /** Refer to {@link DocToBulk#withRoutingFn}. */
     public Write withRoutingFn(FieldValueExtractFn routingFn) {
-      return writeBuilder().setDocToBulk(getDocToBulk().withRoutingFn(routingFn)).build();
+      docToBulk = docToBulk.withRoutingFn(routingFn);
+      return this;
     }
 
     /** Refer to {@link DocToBulk#withTypeFn}. */
     public Write withTypeFn(FieldValueExtractFn typeFn) {
-      return writeBuilder().setDocToBulk(getDocToBulk().withTypeFn(typeFn)).build();
+      docToBulk = docToBulk.withTypeFn(typeFn);
+      return this;
     }
 
     /** Refer to {@link DocToBulk#withDocVersionFn}. */
     public Write withDocVersionFn(FieldValueExtractFn docVersionFn) {
-      return writeBuilder().setDocToBulk(getDocToBulk().withDocVersionFn(docVersionFn)).build();
+      docToBulk = docToBulk.withDocVersionFn(docVersionFn);
+      return this;
     }
 
     /** Refer to {@link DocToBulk#withDocVersionType}. */
     public Write withDocVersionType(String docVersionType) {
-      return writeBuilder().setDocToBulk(getDocToBulk().withDocVersionType(docVersionType)).build();
+      docToBulk = docToBulk.withDocVersionType(docVersionType);
+      return this;
     }
 
     /** Refer to {@link DocToBulk#withUsePartialUpdate}. */
     public Write withUsePartialUpdate(boolean usePartialUpdate) {
-      return writeBuilder()
-          .setDocToBulk(getDocToBulk().withUsePartialUpdate(usePartialUpdate))
-          .build();
+      docToBulk = docToBulk.withUsePartialUpdate(usePartialUpdate);
+      return this;
     }
 
     /** Refer to {@link DocToBulk#withUpsertScript}. */
     public Write withUpsertScript(String source) {
-      return writeBuilder().setDocToBulk(getDocToBulk().withUpsertScript(source)).build();
+      docToBulk = docToBulk.withUpsertScript(source);
+      return this;
     }
 
     /** Refer to {@link DocToBulk#withBackendVersion}. */
     public Write withBackendVersion(int backendVersion) {
-      return writeBuilder().setDocToBulk(getDocToBulk().withBackendVersion(backendVersion)).build();
+      docToBulk = docToBulk.withBackendVersion(backendVersion);
+      return this;
     }
 
     /** Refer to {@link DocToBulk#withIsDeleteFn}. */
     public Write withIsDeleteFn(Write.BooleanFieldValueExtractFn isDeleteFn) {
-      return writeBuilder().setDocToBulk(getDocToBulk().withIsDeleteFn(isDeleteFn)).build();
+      docToBulk = docToBulk.withIsDeleteFn(isDeleteFn);
+      return this;
     }
     // End building Doc2Bulk
 
     /** Refer to {@link BulkIO#withConnectionConfiguration}. */
     public Write withConnectionConfiguration(ConnectionConfiguration connectionConfiguration) {
       checkArgument(connectionConfiguration != null, "connectionConfiguration can not be null");
-
-      return writeBuilder()
-          .setDocToBulk(getDocToBulk().withConnectionConfiguration(connectionConfiguration))
-          .setBulkIO(getBulkIO().withConnectionConfiguration(connectionConfiguration))
-          .build();
+      docToBulk = docToBulk.withConnectionConfiguration(connectionConfiguration);
+      bulkIO = bulkIO.withConnectionConfiguration(connectionConfiguration);
+      return this;
     }
 
     /** Refer to {@link BulkIO#withMaxBatchSize}. */
     public Write withMaxBatchSize(long batchSize) {
-      return writeBuilder().setBulkIO(getBulkIO().withMaxBatchSize(batchSize)).build();
+      bulkIO = bulkIO.withMaxBatchSize(batchSize);
+      return this;
     }
 
     /** Refer to {@link BulkIO#withMaxBatchSizeBytes}. */
     public Write withMaxBatchSizeBytes(long batchSizeBytes) {
-      return writeBuilder().setBulkIO(getBulkIO().withMaxBatchSizeBytes(batchSizeBytes)).build();
+      bulkIO = bulkIO.withMaxBatchSizeBytes(batchSizeBytes);
+      return this;
     }
 
     /** Refer to {@link BulkIO#withRetryConfiguration}. */
     public Write withRetryConfiguration(RetryConfiguration retryConfiguration) {
-      return writeBuilder()
-          .setBulkIO(getBulkIO().withRetryConfiguration(retryConfiguration))
-          .build();
+      bulkIO = bulkIO.withRetryConfiguration(retryConfiguration);
+      return this;
     }
 
     /** Refer to {@link BulkIO#withIgnoreVersionConflicts}. */
     public Write withIgnoreVersionConflicts(boolean ignoreVersionConflicts) {
-      return writeBuilder()
-          .setBulkIO(getBulkIO().withIgnoreVersionConflicts(ignoreVersionConflicts))
-          .build();
+      bulkIO = bulkIO.withIgnoreVersionConflicts(ignoreVersionConflicts);
+      return this;
     }
 
     /** Refer to {@link BulkIO#withUseStatefulBatches}. */
     public Write withUseStatefulBatches(boolean useStatefulBatches) {
-      return writeBuilder()
-          .setBulkIO(getBulkIO().withUseStatefulBatches(useStatefulBatches))
-          .build();
+      bulkIO = bulkIO.withUseStatefulBatches(useStatefulBatches);
+      return this;
     }
 
     /** Refer to {@link BulkIO#withMaxBufferingDuration}. */
     public Write withMaxBufferingDuration(Duration maxBufferingDuration) {
-      return writeBuilder()
-          .setBulkIO(getBulkIO().withMaxBufferingDuration(maxBufferingDuration))
-          .build();
+      bulkIO = bulkIO.withMaxBufferingDuration(maxBufferingDuration);
+      return this;
     }
 
     /** Refer to {@link BulkIO#withMaxParallelRequestsPerWindow}. */
     public Write withMaxParallelRquestsPerWindow(int maxParallelRquestsPerWindow) {
-      return writeBuilder()
-          .setBulkIO(getBulkIO().withMaxParallelRequestsPerWindow(maxParallelRquestsPerWindow))
-          .build();
+      bulkIO = bulkIO.withMaxParallelRequestsPerWindow(maxParallelRquestsPerWindow);
+      return this;
     }
 
     /** Refer to {@link BulkIO#withAllowableResponseErrors}. */
@@ -1671,15 +1683,13 @@ public class ElasticsearchIO {
         allowableResponseErrors = new HashSet<>();
       }
 
-      return writeBuilder()
-          .setBulkIO(getBulkIO().withAllowableResponseErrors(allowableResponseErrors))
-          .build();
+      bulkIO = bulkIO.withAllowableResponseErrors(allowableResponseErrors);
+      return this;
     }
 
     @Override
     public PDone expand(PCollection<String> input) {
-      input.apply(getDocToBulk()).apply(getBulkIO());
-      return PDone.in(input.getPipeline());
+      input.apply(docToBulk).apply(bulkIO);
     }
   }
 
