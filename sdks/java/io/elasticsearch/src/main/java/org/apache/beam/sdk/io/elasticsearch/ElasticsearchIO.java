@@ -32,6 +32,8 @@ import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.Serializable;
+import java.net.ConnectException;
+import java.net.SocketTimeoutException;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.security.KeyStore;
@@ -73,12 +75,14 @@ import org.apache.beam.sdk.values.PBegin;
 import org.apache.beam.sdk.values.PCollection;
 import org.apache.beam.sdk.values.PDone;
 import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.annotations.VisibleForTesting;
+import org.apache.http.ConnectionClosedException;
 import org.apache.http.HttpEntity;
 import org.apache.http.HttpHost;
 import org.apache.http.auth.AuthScope;
 import org.apache.http.auth.UsernamePasswordCredentials;
 import org.apache.http.client.CredentialsProvider;
 import org.apache.http.client.config.RequestConfig;
+import org.apache.http.conn.ConnectTimeoutException;
 import org.apache.http.conn.ssl.TrustSelfSignedStrategy;
 import org.apache.http.conn.ssl.TrustStrategy;
 import org.apache.http.entity.BufferedHttpEntity;
@@ -2003,6 +2007,16 @@ public class ElasticsearchIO {
         }
       }
 
+      private boolean isRetryableClientException(Throwable t) {
+        // RestClient#performRequest only throws wrapped IOException so we must inspect the
+        // exception cause to determine if the exception is likely transient i.e. retryable or
+        // not.
+        return t.getCause() instanceof ConnectTimeoutException ||
+            t.getCause() instanceof SocketTimeoutException ||
+            t.getCause() instanceof ConnectionClosedException ||
+            t.getCause() instanceof ConnectException;
+      }
+
       private void flushBatch() throws IOException, InterruptedException {
         if (batch.isEmpty()) {
           return;
@@ -2039,7 +2053,7 @@ public class ElasticsearchIO {
           response = restClient.performRequest(request);
           responseEntity = new BufferedHttpEntity(response.getEntity());
         } catch (java.io.IOException ex) {
-          if (spec.getRetryConfiguration() == null) {
+          if (spec.getRetryConfiguration() == null || !isRetryableClientException(ex)) {
             throw ex;
           }
           LOG.error("Caught ES timeout, retrying", ex);
@@ -2077,8 +2091,10 @@ public class ElasticsearchIO {
             response = restClient.performRequest(request);
             responseEntity = new BufferedHttpEntity(response.getEntity());
           } catch (java.io.IOException ex) {
-            LOG.error("Caught ES timeout, retrying", ex);
-            continue;
+              if (isRetryableClientException(ex)) {
+                LOG.error("Caught ES timeout, retrying", ex);
+                continue;
+              }
           }
           // if response has no 429 errors
           if (!Objects.requireNonNull(spec.getRetryConfiguration())
