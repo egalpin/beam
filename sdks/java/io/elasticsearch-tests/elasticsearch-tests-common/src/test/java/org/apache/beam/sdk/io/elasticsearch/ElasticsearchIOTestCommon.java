@@ -259,6 +259,14 @@ class ElasticsearchIOTestCommon implements Serializable {
     executeWriteTest(write);
   }
 
+  void testWriteStateful() throws Exception {
+    Write write =
+        ElasticsearchIO.write()
+            .withConnectionConfiguration(connectionConfiguration)
+            .withUseStatefulBatches(true);
+    executeWriteTest(write);
+  }
+
   void testWriteWithErrors() throws Exception {
     Write write =
         ElasticsearchIO.write()
@@ -322,8 +330,8 @@ class ElasticsearchIOTestCommon implements Serializable {
 
     // write bundles size is the runner decision, we cannot force a bundle size,
     // so we test the Writer as a DoFn outside of a runner.
-    try (DoFnTester<Iterable<String>, Void> fnTester =
-        DoFnTester.of(new BulkIO.BulkIOFn(write.getBulkIO()))) {
+    try (DoFnTester<String, Void> fnTester =
+        DoFnTester.of(new BulkIO.BulkIOBundleFn(write.getBulkIO()))) {
       // inserts into Elasticsearch
       fnTester.processBundle(serializedInput);
     }
