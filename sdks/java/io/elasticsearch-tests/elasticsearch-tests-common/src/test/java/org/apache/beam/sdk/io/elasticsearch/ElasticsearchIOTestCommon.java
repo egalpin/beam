@@ -472,7 +472,7 @@ class ElasticsearchIOTestCommon implements Serializable {
     long currentNumDocs = refreshIndexAndGetCurrentNumDocs(connectionConfiguration, restClient);
     assertEquals(NUM_SCIENTISTS, currentNumDocs);
 
-    int count = countByScientistName(connectionConfiguration, restClient, "Einstein");
+    int count = countByScientistName(connectionConfiguration, restClient, "Einstein", null);
     assertEquals(1, count);
   }
 
@@ -594,6 +594,41 @@ class ElasticsearchIOTestCommon implements Serializable {
   }
 
   /**
+   * Tests that documents are correctly routed when index, type and document ID functions are
+   * provided to overwrite the defaults of using the configuration and auto-generation of the
+   * document IDs by Elasticsearch. The scientist name is used for the index, type and document ID.
+   * As a result there should be only a single document in each index/type.
+   */
+  void testWriteWithFullAddressingAndRouting() throws Exception {
+    List<String> data =
+        ElasticsearchIOTestUtils.createDocuments(
+            numDocs, ElasticsearchIOTestUtils.InjectionMode.DO_NOT_INJECT_INVALID_DOCS);
+    pipeline
+        .apply(Create.of(data))
+        .apply(
+            ElasticsearchIO.write()
+                .withConnectionConfiguration(connectionConfiguration)
+                .withIdFn(new ExtractValueFn("id"))
+                .withRoutingFn(new ExtractValueFn("scientist"))
+                .withIndexFn(new ExtractValueFn("scientist"))
+                .withTypeFn(new Modulo2ValueFn("scientist")));
+    pipeline.run();
+
+    for (String scientist : FAMOUS_SCIENTISTS) {
+      String index = scientist.toLowerCase();
+      String routing = scientist;
+
+      for (int i = 0; i < 2; i++) {
+        String type = "TYPE_" + scientist.hashCode() % 2;
+        long count =
+            refreshIndexAndGetCurrentNumDocs(
+                restClient, index, type, getBackendVersion(connectionConfiguration), routing);
+        assertEquals("Incorrect count for " + index + "/" + type, numDocs / NUM_SCIENTISTS, count);
+      }
+    }
+  }
+
+  /**
    * Tests partial updates by adding a group field to each document in the standard test set. The
    * group field is populated as the modulo 2 of the document id allowing for a test to ensure the
    * documents are split into 2 groups.
@@ -629,11 +664,11 @@ class ElasticsearchIOTestCommon implements Serializable {
     assertEquals(numDocs, currentNumDocs);
     assertEquals(
         numDocs / NUM_SCIENTISTS,
-        countByScientistName(connectionConfiguration, restClient, "Einstein"));
+        countByScientistName(connectionConfiguration, restClient, "Einstein", null));
 
     // Partial update assertions
-    assertEquals(numDocs / 2, countByMatch(connectionConfiguration, restClient, "group", "0"));
-    assertEquals(numDocs / 2, countByMatch(connectionConfiguration, restClient, "group", "1"));
+    assertEquals(numDocs / 2, countByMatch(connectionConfiguration, restClient, "group", "0", null));
+    assertEquals(numDocs / 2, countByMatch(connectionConfiguration, restClient, "group", "1", null));
   }
 
   /**
@@ -721,7 +756,7 @@ class ElasticsearchIOTestCommon implements Serializable {
     long currentNumDocs = refreshIndexAndGetCurrentNumDocs(connectionConfiguration, restClient);
     assertEquals(numDocs, currentNumDocs);
 
-    int count = countByScientistName(connectionConfiguration, restClient, "Einstein");
+    int count = countByScientistName(connectionConfiguration, restClient, "Einstein", null);
     assertEquals(numDocs / NUM_SCIENTISTS, count);
   }
 
@@ -760,11 +795,11 @@ class ElasticsearchIOTestCommon implements Serializable {
     // check we have not unwittingly modified existing behaviour
     assertEquals(
         numDocs / NUM_SCIENTISTS,
-        countByScientistName(connectionConfiguration, restClient, "Einstein"));
+        countByScientistName(connectionConfiguration, restClient, "Einstein", null));
 
     // Check if documents are deleted as expected
     assertEquals(numDocs / 2, currentNumDocs);
-    assertEquals(0, countByScientistName(connectionConfiguration, restClient, "Darwin"));
+    assertEquals(0, countByScientistName(connectionConfiguration, restClient, "Darwin", null));
   }
 
   /**
@@ -802,10 +837,10 @@ class ElasticsearchIOTestCommon implements Serializable {
     // check we have not unwittingly modified existing behaviour
     assertEquals(
         numDocs / NUM_SCIENTISTS,
-        countByScientistName(connectionConfiguration, restClient, "Einstein"));
+        countByScientistName(connectionConfiguration, restClient, "Einstein", null));
 
     // Check if documents are deleted as expected
     assertEquals(numDocs / 2, currentNumDocs);
-    assertEquals(0, countByScientistName(connectionConfiguration, restClient, "Darwin"));
+    assertEquals(0, countByScientistName(connectionConfiguration, restClient, "Darwin", null));
   }
 }

@@ -21,6 +21,7 @@ import static org.apache.beam.sdk.io.elasticsearch.ElasticsearchIO.ConnectionCon
 import static org.apache.beam.sdk.io.elasticsearch.ElasticsearchIO.getBackendVersion;
 import static org.apache.beam.sdk.io.elasticsearch.ElasticsearchIO.parseResponse;
 
+import org.checkerframework.checker.nullness.qual.Nullable;
 import com.fasterxml.jackson.databind.JsonNode;
 import java.io.IOException;
 import java.util.ArrayList;
@@ -128,6 +129,7 @@ class ElasticsearchIOTestUtils {
     Response response = restClient.performRequest(request);
     ElasticsearchIO.checkForErrors(response.getEntity(), Collections.emptySet());
   }
+
   /**
    * Forces a refresh of the given index to make recently inserted documents available for search
    * using the index and type named in the connectionConfiguration.
@@ -143,31 +145,61 @@ class ElasticsearchIOTestUtils {
         restClient,
         connectionConfiguration.getIndex(),
         connectionConfiguration.getType(),
-        getBackendVersion(connectionConfiguration));
+        getBackendVersion(connectionConfiguration),
+        null);
   }
 
+  /**
+   * Forces a refresh of the given index to make recently inserted documents available for search
+   * using the index and type named in the connectionConfiguration.
+   *
+   * @param connectionConfiguration providing the index and type
+   * @param restClient To use for issuing queries
+   * @param routing Optional routing URL parameter
+   * @return The number of docs in the index
+   * @throws IOException On error communicating with Elasticsearch
+   */
+  static long refreshIndexAndGetCurrentNumDocs(
+      ConnectionConfiguration connectionConfiguration,
+      RestClient restClient,
+      @Nullable String routing)
+      throws IOException {
+    return refreshIndexAndGetCurrentNumDocs(
+        restClient,
+        connectionConfiguration.getIndex(),
+        connectionConfiguration.getType(),
+        getBackendVersion(connectionConfiguration),
+        routing);
+  }
+
+  static long refreshIndexAndGetCurrentNumDocs(
+      RestClient restClient, String index, String type, int backendVersion) throws IOException {
+      return refreshIndexAndGetCurrentNumDocs(restClient, index, type, backendVersion, null);
+  }
   /**
    * Forces a refresh of the given index to make recently inserted documents available for search.
    *
    * @param restClient To use for issuing queries
    * @param index The Elasticsearch index
    * @param type The Elasticsearch type
+   * @param routing Optional routing URL parameter
    * @return The number of docs in the index
    * @throws IOException On error communicating with Elasticsearch
    */
   static long refreshIndexAndGetCurrentNumDocs(
-      RestClient restClient, String index, String type, int backenVersion) throws IOException {
+      RestClient restClient, String index, String type, int backendVersion,
+      @Nullable String routing) throws IOException {
     long result = 0;
     try {
       String endPoint = String.format("/%s/_refresh", index);
       Request request = new Request("POST", endPoint);
       restClient.performRequest(request);
 
-      endPoint = String.format("/%s/%s/_search", index, type);
+      endPoint = generateSearchPath(index, type, routing);
       request = new Request("GET", endPoint);
       Response response = restClient.performRequest(request);
       JsonNode searchResult = ElasticsearchIO.parseResponse(response.getEntity());
-      if (backenVersion >= 7) {
+      if (backendVersion >= 7) {
         result = searchResult.path("hits").path("total").path("value").asLong();
       } else {
         result = searchResult.path("hits").path("total").asLong();
@@ -216,9 +248,48 @@ class ElasticsearchIOTestUtils {
    * @throws IOException On error talking to Elasticsearch
    */
   static int countByScientistName(
-      ConnectionConfiguration connectionConfiguration, RestClient restClient, String scientistName)
+      ConnectionConfiguration connectionConfiguration, RestClient restClient,
+      String scientistName, @Nullable String routing)
       throws IOException {
-    return countByMatch(connectionConfiguration, restClient, "scientist", scientistName);
+    return countByMatch(connectionConfiguration, restClient, "scientist", scientistName, routing);
+  }
+
+  /**
+   * Creates a _search API path depending on ConnectionConfiguration and routing settings.
+   * @param index Optional Elasticsearch index
+   * @param type Optional Elasticsearch type
+   * @param routing Optional routing URL parameter
+   * @return The _search endpoint for the provided settings.
+   */
+  static String generateSearchPath(
+      @Nullable String index, @Nullable String type, @Nullable String routing) {
+    StringBuilder sb = new StringBuilder();
+    if (index != null) {
+      sb.append("/").append(index);
+    }
+    if (type != null) {
+      sb.append("/").append(type);
+    }
+
+    sb.append("/_search");
+
+    if (routing != null) {
+      sb.append("?routing=").append(routing);
+    }
+
+    return sb.toString();
+  }
+
+  /**
+   * Creates a _search API path depending on ConnectionConfiguration and routing settings.
+   * @param connectionConfiguration Specifies the index and type
+   * @param routing Optional routing URL parameter
+   * @return The _search endpoint for the provided settings.
+   */
+  static String generateSearchPath(
+      ConnectionConfiguration connectionConfiguration, @Nullable String routing) {
+    return generateSearchPath(
+        connectionConfiguration.getIndex(), connectionConfiguration.getType(), routing);
   }
 
   /**
@@ -235,7 +306,8 @@ class ElasticsearchIOTestUtils {
       ConnectionConfiguration connectionConfiguration,
       RestClient restClient,
       String field,
-      String value)
+      String value,
+      @Nullable String routing)
       throws IOException {
     String requestBody =
         "{\n"
@@ -247,10 +319,9 @@ class ElasticsearchIOTestUtils {
             + "\"\n"
             + "  }}\n"
             + "}\n";
-    String endPoint =
-        String.format(
-            "/%s/%s/_search",
-            connectionConfiguration.getIndex(), connectionConfiguration.getType());
+
+
+    String endPoint = generateSearchPath(connectionConfiguration, routing);
     HttpEntity httpEntity = new NStringEntity(requestBody, ContentType.APPLICATION_JSON);
 
     Request request = new Request("GET", endPoint);

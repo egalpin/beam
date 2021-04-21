@@ -157,11 +157,6 @@ public class ElasticsearchIOTest implements Serializable {
   }
 
   @Test
-  public void testWriteWithAllowableErrors() throws Exception {
-    elasticsearchIOTestCommon.testWriteWithAllowedErrors();
-  }
-
-  @Test
   public void testWriteWithAllowedErrors() throws Exception {
     elasticsearchIOTestCommon.testWriteWithAllowedErrors();
   }
@@ -203,6 +198,12 @@ public class ElasticsearchIOTest implements Serializable {
   public void testWriteFullAddressing() throws Exception {
     elasticsearchIOTestCommon.setPipeline(pipeline);
     elasticsearchIOTestCommon.testWriteWithFullAddressing();
+  }
+
+  @Test
+  public void testWriteWithFullAddressingAndRouting() throws Exception {
+    elasticsearchIOTestCommon.setPipeline(pipeline);
+    elasticsearchIOTestCommon.testWriteWithFullAddressingAndRouting();
   }
 
   @Test
