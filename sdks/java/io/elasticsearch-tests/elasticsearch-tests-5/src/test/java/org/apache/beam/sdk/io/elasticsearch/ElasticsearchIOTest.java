@@ -30,6 +30,7 @@ import java.util.ArrayList;
 import java.util.Collection;
 import org.apache.beam.sdk.testing.TestPipeline;
 import org.elasticsearch.common.settings.Settings;
+import org.elasticsearch.painless.PainlessPlugin;
 import org.elasticsearch.plugins.Plugin;
 import org.elasticsearch.test.ESIntegTestCase;
 import org.elasticsearch.transport.Netty4Plugin;
@@ -85,6 +86,7 @@ public class ElasticsearchIOTest extends ESIntegTestCase implements Serializable
   protected Collection<Class<? extends Plugin>> nodePlugins() {
     ArrayList<Class<? extends Plugin>> plugins = new ArrayList<>();
     plugins.add(Netty4Plugin.class);
+    plugins.add(PainlessPlugin.class);
     return plugins;
   }
 
@@ -208,6 +210,12 @@ public class ElasticsearchIOTest extends ESIntegTestCase implements Serializable
   public void testWritePartialUpdate() throws Exception {
     elasticsearchIOTestCommon.setPipeline(pipeline);
     elasticsearchIOTestCommon.testWritePartialUpdate();
+  }
+
+  @Test
+  public void testWriteScriptedUpsert() throws Exception {
+    elasticsearchIOTestCommon.setPipeline(pipeline);
+    elasticsearchIOTestCommon.testWriteScriptedUpsert();
   }
 
   @Test

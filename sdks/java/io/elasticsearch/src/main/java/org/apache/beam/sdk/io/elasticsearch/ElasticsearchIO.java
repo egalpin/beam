@@ -1279,6 +1279,9 @@ public class ElasticsearchIO {
      * @return the {@link DocToBulk} with the scripted updates set
      */
     public DocToBulk withUpsertScript(String source) {
+      if (getBackendVersion() == null || getBackendVersion() == 2) {
+        LOG.warn("Painless scripts are not supported on Elasticsearch clusters before version 5.0");
+      }
       return builder().setUsePartialUpdate(false).setUpsertScript(source).build();
     }
 
@@ -1456,7 +1459,7 @@ public class ElasticsearchIO {
         } else if (spec.getUpsertScript() != null) {
           return String.format(
               "{ \"update\" : %s }%n{ \"script\" : {\"source\": \"%s\", "
-                  + "\"params\": %s}, \"upsert\" : %s }%n",
+                  + "\"params\": %s}, \"upsert\" : %s, \"scripted_upsert\": true}%n",
               documentMetadata, spec.getUpsertScript(), document, document);
         } else {
           return String.format("{ \"index\" : %s }%n%s%n", documentMetadata, document);

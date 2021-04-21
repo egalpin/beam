@@ -21,7 +21,6 @@ import static org.apache.beam.sdk.io.elasticsearch.ElasticsearchIO.ConnectionCon
 import static org.apache.beam.sdk.io.elasticsearch.ElasticsearchIO.getBackendVersion;
 import static org.apache.beam.sdk.io.elasticsearch.ElasticsearchIO.parseResponse;
 
-import org.checkerframework.checker.nullness.qual.Nullable;
 import com.fasterxml.jackson.databind.JsonNode;
 import java.io.IOException;
 import java.util.ArrayList;
@@ -30,6 +29,7 @@ import java.util.List;
 import org.apache.http.HttpEntity;
 import org.apache.http.entity.ContentType;
 import org.apache.http.nio.entity.NStringEntity;
+import org.checkerframework.checker.nullness.qual.Nullable;
 import org.elasticsearch.client.Request;
 import org.elasticsearch.client.Response;
 import org.elasticsearch.client.RestClient;
@@ -49,6 +49,9 @@ class ElasticsearchIOTestUtils {
     "Maxwell"
   };
   static final int NUM_SCIENTISTS = FAMOUS_SCIENTISTS.length;
+  static final String SCRIPT_SOURCE =
+      "if(ctx._source.group != null) { ctx._source.group = params.id % 2 } else { ctx._source"
+          + ".group = 0 }";
 
   /** Enumeration that specifies whether to insert malformed documents. */
   public enum InjectionMode {
@@ -174,7 +177,7 @@ class ElasticsearchIOTestUtils {
 
   static long refreshIndexAndGetCurrentNumDocs(
       RestClient restClient, String index, String type, int backendVersion) throws IOException {
-      return refreshIndexAndGetCurrentNumDocs(restClient, index, type, backendVersion, null);
+    return refreshIndexAndGetCurrentNumDocs(restClient, index, type, backendVersion, null);
   }
   /**
    * Forces a refresh of the given index to make recently inserted documents available for search.
@@ -187,8 +190,12 @@ class ElasticsearchIOTestUtils {
    * @throws IOException On error communicating with Elasticsearch
    */
   static long refreshIndexAndGetCurrentNumDocs(
-      RestClient restClient, String index, String type, int backendVersion,
-      @Nullable String routing) throws IOException {
+      RestClient restClient,
+      String index,
+      String type,
+      int backendVersion,
+      @Nullable String routing)
+      throws IOException {
     long result = 0;
     try {
       String endPoint = String.format("/%s/_refresh", index);
@@ -248,14 +255,17 @@ class ElasticsearchIOTestUtils {
    * @throws IOException On error talking to Elasticsearch
    */
   static int countByScientistName(
-      ConnectionConfiguration connectionConfiguration, RestClient restClient,
-      String scientistName, @Nullable String routing)
+      ConnectionConfiguration connectionConfiguration,
+      RestClient restClient,
+      String scientistName,
+      @Nullable String routing)
       throws IOException {
     return countByMatch(connectionConfiguration, restClient, "scientist", scientistName, routing);
   }
 
   /**
    * Creates a _search API path depending on ConnectionConfiguration and routing settings.
+   *
    * @param index Optional Elasticsearch index
    * @param type Optional Elasticsearch type
    * @param routing Optional routing URL parameter
@@ -282,6 +292,7 @@ class ElasticsearchIOTestUtils {
 
   /**
    * Creates a _search API path depending on ConnectionConfiguration and routing settings.
+   *
    * @param connectionConfiguration Specifies the index and type
    * @param routing Optional routing URL parameter
    * @return The _search endpoint for the provided settings.
@@ -319,7 +330,6 @@ class ElasticsearchIOTestUtils {
             + "\"\n"
             + "  }}\n"
             + "}\n";
-
 
     String endPoint = generateSearchPath(connectionConfiguration, routing);
     HttpEntity httpEntity = new NStringEntity(requestBody, ContentType.APPLICATION_JSON);

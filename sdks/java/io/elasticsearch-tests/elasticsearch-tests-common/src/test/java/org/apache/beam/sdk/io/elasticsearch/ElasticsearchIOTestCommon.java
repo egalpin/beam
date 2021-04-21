@@ -27,6 +27,7 @@ import static org.apache.beam.sdk.io.elasticsearch.ElasticsearchIO.Write;
 import static org.apache.beam.sdk.io.elasticsearch.ElasticsearchIO.getBackendVersion;
 import static org.apache.beam.sdk.io.elasticsearch.ElasticsearchIOTestUtils.FAMOUS_SCIENTISTS;
 import static org.apache.beam.sdk.io.elasticsearch.ElasticsearchIOTestUtils.NUM_SCIENTISTS;
+import static org.apache.beam.sdk.io.elasticsearch.ElasticsearchIOTestUtils.SCRIPT_SOURCE;
 import static org.apache.beam.sdk.io.elasticsearch.ElasticsearchIOTestUtils.countByMatch;
 import static org.apache.beam.sdk.io.elasticsearch.ElasticsearchIOTestUtils.countByScientistName;
 import static org.apache.beam.sdk.io.elasticsearch.ElasticsearchIOTestUtils.refreshIndexAndGetCurrentNumDocs;
@@ -667,8 +668,67 @@ class ElasticsearchIOTestCommon implements Serializable {
         countByScientistName(connectionConfiguration, restClient, "Einstein", null));
 
     // Partial update assertions
-    assertEquals(numDocs / 2, countByMatch(connectionConfiguration, restClient, "group", "0", null));
-    assertEquals(numDocs / 2, countByMatch(connectionConfiguration, restClient, "group", "1", null));
+    assertEquals(
+        numDocs / 2, countByMatch(connectionConfiguration, restClient, "group", "0", null));
+    assertEquals(
+        numDocs / 2, countByMatch(connectionConfiguration, restClient, "group", "1", null));
+  }
+
+  /**
+   * Tests upsert script by adding a group field to each document in the standard test set. The
+   * group field is populated as the modulo 2 of the document id allowing for a test to ensure the
+   * documents are split into 2 groups.
+   */
+  void testWriteScriptedUpsert() throws Exception {
+    List<String> data =
+        ElasticsearchIOTestUtils.createDocuments(
+            numDocs, ElasticsearchIOTestUtils.InjectionMode.DO_NOT_INJECT_INVALID_DOCS);
+
+    // Test that documents can be inserted/created by using withUpsertScript
+    pipeline
+        .apply(Create.of(data))
+        .apply(
+            ElasticsearchIO.write()
+                .withConnectionConfiguration(connectionConfiguration)
+                .withIdFn(new ExtractValueFn("id"))
+                .withUpsertScript(SCRIPT_SOURCE));
+    pipeline.run();
+
+    // defensive coding to ensure our initial state is as expected
+    long currentNumDocs = refreshIndexAndGetCurrentNumDocs(connectionConfiguration, restClient);
+    // check we have not unwittingly modified existing behaviour
+    assertEquals(numDocs, currentNumDocs);
+    assertEquals(
+        numDocs / NUM_SCIENTISTS,
+        countByScientistName(connectionConfiguration, restClient, "Einstein", null));
+
+    // All docs should have have group = 0 added by the script upon creation
+    assertEquals(numDocs, countByMatch(connectionConfiguration, restClient, "group", "0", null));
+
+    // Run the same data again. This time, because all docs exist in the index already, scripted
+    // updates should happen rather than scripted inserts.
+    pipeline
+        .apply(Create.of(data))
+        .apply(
+            ElasticsearchIO.write()
+                .withConnectionConfiguration(connectionConfiguration)
+                .withIdFn(new ExtractValueFn("id"))
+                .withUpsertScript(SCRIPT_SOURCE));
+    pipeline.run();
+
+    currentNumDocs = refreshIndexAndGetCurrentNumDocs(connectionConfiguration, restClient);
+
+    // check we have not unwittingly modified existing behaviour
+    assertEquals(numDocs, currentNumDocs);
+    assertEquals(
+        numDocs / NUM_SCIENTISTS,
+        countByScientistName(connectionConfiguration, restClient, "Einstein", null));
+
+    // The script will set either 0 or 1 for the group value on update operations
+    assertEquals(
+        numDocs / 2, countByMatch(connectionConfiguration, restClient, "group", "0", null));
+    assertEquals(
+        numDocs / 2, countByMatch(connectionConfiguration, restClient, "group", "1", null));
   }
 
   /**
