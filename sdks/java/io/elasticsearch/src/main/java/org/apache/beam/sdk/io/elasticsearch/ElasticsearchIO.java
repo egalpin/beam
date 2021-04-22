@@ -1937,7 +1937,7 @@ public class ElasticsearchIO {
     static class BulkIOBundleFn extends BulkIOBaseFn<String> {
       @VisibleForTesting
       BulkIOBundleFn(BulkIO bulkSpec) {
-        this.spec = bulkSpec;
+        super(bulkSpec);
       }
 
       @ProcessElement
@@ -1953,7 +1953,7 @@ public class ElasticsearchIO {
     static class BulkIOStatefulFn extends BulkIOBaseFn<KV<Integer, Iterable<String>>> {
       @VisibleForTesting
       BulkIOStatefulFn(BulkIO bulkSpec) {
-        this.spec = bulkSpec;
+        super(bulkSpec);
       }
 
       @ProcessElement
@@ -1972,10 +1972,14 @@ public class ElasticsearchIO {
 
       private transient FluentBackoff retryBackoff;
 
-      protected BulkIO spec;
+      private BulkIO spec;
       private transient RestClient restClient;
       protected ArrayList<String> batch;
       long currentBatchSizeBytes;
+
+      protected BulkIOBaseFn(BulkIO bulkSpec) {
+        this.spec = bulkSpec;
+      }
 
       @Setup
       public void setup() throws IOException {

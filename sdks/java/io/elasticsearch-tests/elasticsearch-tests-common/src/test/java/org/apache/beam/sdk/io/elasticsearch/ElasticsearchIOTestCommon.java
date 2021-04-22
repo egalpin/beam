@@ -30,6 +30,7 @@ import static org.apache.beam.sdk.io.elasticsearch.ElasticsearchIOTestUtils.NUM_
 import static org.apache.beam.sdk.io.elasticsearch.ElasticsearchIOTestUtils.SCRIPT_SOURCE;
 import static org.apache.beam.sdk.io.elasticsearch.ElasticsearchIOTestUtils.countByMatch;
 import static org.apache.beam.sdk.io.elasticsearch.ElasticsearchIOTestUtils.countByScientistName;
+import static org.apache.beam.sdk.io.elasticsearch.ElasticsearchIOTestUtils.insertTestDocuments;
 import static org.apache.beam.sdk.io.elasticsearch.ElasticsearchIOTestUtils.refreshIndexAndGetCurrentNumDocs;
 import static org.apache.beam.sdk.testing.SourceTestUtils.readFromSource;
 import static org.hamcrest.MatcherAssert.assertThat;
@@ -42,6 +43,7 @@ import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.io.IOException;
 import java.io.Serializable;
 import java.nio.charset.StandardCharsets;
@@ -49,7 +51,9 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.function.BiFunction;
+import javafx.util.Pair;
 import org.apache.beam.sdk.io.BoundedSource;
 import org.apache.beam.sdk.io.elasticsearch.ElasticsearchIO.RetryConfiguration.DefaultRetryPredicate;
 import org.apache.beam.sdk.io.elasticsearch.ElasticsearchIO.RetryConfiguration.RetryPredicate;
@@ -617,7 +621,7 @@ class ElasticsearchIOTestCommon implements Serializable {
 
     for (String scientist : FAMOUS_SCIENTISTS) {
       String index = scientist.toLowerCase();
-      String routing = scientist;
+      Map<String, String> routing = Collections.singletonMap("routing", scientist);
 
       for (int i = 0; i < 2; i++) {
         String type = "TYPE_" + scientist.hashCode() % 2;
@@ -669,9 +673,62 @@ class ElasticsearchIOTestCommon implements Serializable {
 
     // Partial update assertions
     assertEquals(
-        numDocs / 2, countByMatch(connectionConfiguration, restClient, "group", "0", null));
+        numDocs / 2, countByMatch(connectionConfiguration, restClient, "group", "0", null, null));
     assertEquals(
-        numDocs / 2, countByMatch(connectionConfiguration, restClient, "group", "1", null));
+        numDocs / 2, countByMatch(connectionConfiguration, restClient, "group", "1", null, null));
+  }
+
+  void testWriteWithDocVersion() throws Exception {
+    List<ObjectNode> jsonData =
+        ElasticsearchIOTestUtils.createJsonDocuments(
+            numDocs, ElasticsearchIOTestUtils.InjectionMode.DO_NOT_INJECT_INVALID_DOCS);
+
+    List<String> data = new ArrayList<>();
+    for (ObjectNode doc : jsonData) {
+      doc.put("my_version", "1");
+      data.add(doc.toString());
+    }
+
+    insertTestDocuments(connectionConfiguration, data, restClient);
+    long currentNumDocs = refreshIndexAndGetCurrentNumDocs(connectionConfiguration, restClient);
+    assertEquals(numDocs, currentNumDocs);
+    // Check that all docs have the same "my_version"
+    assertEquals(
+        numDocs,
+        countByMatch(
+            connectionConfiguration, restClient, "my_version", "1", null, new Pair<>(1, numDocs)));
+
+    Write write =
+        ElasticsearchIO.write()
+            .withConnectionConfiguration(connectionConfiguration)
+            .withIdFn(new ExtractValueFn("id"))
+            .withDocVersionFn(new ExtractValueFn("my_version"))
+            .withDocVersionType("external");
+
+    data = new ArrayList<>();
+    for (ObjectNode doc : jsonData) {
+      // Set version to larger number than originally set, and larger than next logical version
+      // number set by default by ES.
+      doc.put("my_version", "3");
+      data.add(doc.toString());
+    }
+
+    // Test that documents with lower version are rejected, but rejections ignored when specified
+    pipeline.apply(Create.of(data)).apply(write);
+    pipeline.run();
+
+    currentNumDocs = refreshIndexAndGetCurrentNumDocs(connectionConfiguration, restClient);
+    assertEquals(numDocs, currentNumDocs);
+
+    // my_version and doc version should have changed
+    assertEquals(
+        0,
+        countByMatch(
+            connectionConfiguration, restClient, "my_version", "1", null, new Pair<>(1, numDocs)));
+    assertEquals(
+        numDocs,
+        countByMatch(
+            connectionConfiguration, restClient, "my_version", "3", null, new Pair<>(3, numDocs)));
   }
 
   /**
@@ -684,14 +741,14 @@ class ElasticsearchIOTestCommon implements Serializable {
         ElasticsearchIOTestUtils.createDocuments(
             numDocs, ElasticsearchIOTestUtils.InjectionMode.DO_NOT_INJECT_INVALID_DOCS);
 
+    Write write =
+        ElasticsearchIO.write()
+            .withConnectionConfiguration(connectionConfiguration)
+            .withIdFn(new ExtractValueFn("id"))
+            .withUpsertScript(SCRIPT_SOURCE);
+
     // Test that documents can be inserted/created by using withUpsertScript
-    pipeline
-        .apply(Create.of(data))
-        .apply(
-            ElasticsearchIO.write()
-                .withConnectionConfiguration(connectionConfiguration)
-                .withIdFn(new ExtractValueFn("id"))
-                .withUpsertScript(SCRIPT_SOURCE));
+    pipeline.apply(Create.of(data)).apply(write);
     pipeline.run();
 
     // defensive coding to ensure our initial state is as expected
@@ -703,17 +760,12 @@ class ElasticsearchIOTestCommon implements Serializable {
         countByScientistName(connectionConfiguration, restClient, "Einstein", null));
 
     // All docs should have have group = 0 added by the script upon creation
-    assertEquals(numDocs, countByMatch(connectionConfiguration, restClient, "group", "0", null));
+    assertEquals(
+        numDocs, countByMatch(connectionConfiguration, restClient, "group", "0", null, null));
 
     // Run the same data again. This time, because all docs exist in the index already, scripted
     // updates should happen rather than scripted inserts.
-    pipeline
-        .apply(Create.of(data))
-        .apply(
-            ElasticsearchIO.write()
-                .withConnectionConfiguration(connectionConfiguration)
-                .withIdFn(new ExtractValueFn("id"))
-                .withUpsertScript(SCRIPT_SOURCE));
+    pipeline.apply(Create.of(data)).apply(write);
     pipeline.run();
 
     currentNumDocs = refreshIndexAndGetCurrentNumDocs(connectionConfiguration, restClient);
@@ -726,9 +778,9 @@ class ElasticsearchIOTestCommon implements Serializable {
 
     // The script will set either 0 or 1 for the group value on update operations
     assertEquals(
-        numDocs / 2, countByMatch(connectionConfiguration, restClient, "group", "0", null));
+        numDocs / 2, countByMatch(connectionConfiguration, restClient, "group", "0", null, null));
     assertEquals(
-        numDocs / 2, countByMatch(connectionConfiguration, restClient, "group", "1", null));
+        numDocs / 2, countByMatch(connectionConfiguration, restClient, "group", "1", null, null));
   }
 
   /**

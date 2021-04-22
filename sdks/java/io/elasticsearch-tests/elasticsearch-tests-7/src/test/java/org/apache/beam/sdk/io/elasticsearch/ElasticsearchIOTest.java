@@ -217,6 +217,12 @@ public class ElasticsearchIOTest extends ESIntegTestCase implements Serializable
   }
 
   @Test
+  public void testWriteWithDocVersion() throws Exception {
+    elasticsearchIOTestCommon.setPipeline(pipeline);
+    elasticsearchIOTestCommon.testWriteWithDocVersion();
+  }
+
+  @Test
   public void testReadWithMetadata() throws Exception {
     elasticsearchIOTestCommon.setPipeline(pipeline);
     elasticsearchIOTestCommon.testReadWithMetadata();
