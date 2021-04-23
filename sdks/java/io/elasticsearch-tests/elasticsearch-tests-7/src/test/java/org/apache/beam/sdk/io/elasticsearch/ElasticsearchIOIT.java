@@ -136,6 +136,29 @@ public class ElasticsearchIOIT {
     elasticsearchIOTestCommonWrite.testWriteWithFullAddressing();
   }
 
+  @Test
+  public void testWriteWithAllowableErrors() throws Exception {
+    elasticsearchIOTestCommon.testWriteWithAllowedErrors();
+  }
+
+  @Test
+  public void testWriteWithFullAddressingAndRouting() throws Exception {
+    elasticsearchIOTestCommon.setPipeline(pipeline);
+    elasticsearchIOTestCommon.testWriteWithFullAddressingAndRouting();
+  }
+
+  @Test
+  public void testWriteScriptedUpsert() throws Exception {
+    elasticsearchIOTestCommon.setPipeline(pipeline);
+    elasticsearchIOTestCommon.testWriteScriptedUpsert();
+  }
+
+  @Test
+  public void testWriteWithDocVersion() throws Exception {
+    elasticsearchIOTestCommon.setPipeline(pipeline);
+    elasticsearchIOTestCommon.testWriteWithDocVersion();
+  }
+
   /**
    * This test verifies volume partial updates of Elasticsearch. The test dataset index is cloned
    * and then a new field is added to each document using a partial update. The test then asserts

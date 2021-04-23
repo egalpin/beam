@@ -158,11 +158,6 @@ public class ElasticsearchIOTest extends ESIntegTestCase implements Serializable
   }
 
   @Test
-  public void testWriteWithAllowableErrors() throws Exception {
-    elasticsearchIOTestCommon.testWriteWithAllowedErrors();
-  }
-
-  @Test
   public void testWriteWithMaxBatchSize() throws Exception {
     elasticsearchIOTestCommon.testWriteWithMaxBatchSize();
   }
@@ -199,15 +194,20 @@ public class ElasticsearchIOTest extends ESIntegTestCase implements Serializable
   }
 
   @Test
-  public void testWriteWithFullAddressingAndRouting() throws Exception {
-    elasticsearchIOTestCommon.setPipeline(pipeline);
-    elasticsearchIOTestCommon.testWriteWithFullAddressingAndRouting();
-  }
-
-  @Test
   public void testWritePartialUpdate() throws Exception {
     elasticsearchIOTestCommon.setPipeline(pipeline);
     elasticsearchIOTestCommon.testWritePartialUpdate();
+  }
+
+  @Test
+  public void testWriteWithAllowableErrors() throws Exception {
+    elasticsearchIOTestCommon.testWriteWithAllowedErrors();
+  }
+
+  @Test
+  public void testWriteWithFullAddressingAndRouting() throws Exception {
+    elasticsearchIOTestCommon.setPipeline(pipeline);
+    elasticsearchIOTestCommon.testWriteWithFullAddressingAndRouting();
   }
 
   @Test
