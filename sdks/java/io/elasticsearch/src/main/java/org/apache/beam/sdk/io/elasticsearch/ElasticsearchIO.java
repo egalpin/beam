@@ -131,6 +131,39 @@ import org.slf4j.LoggerFactory;
  * ElasticsearchIO.write()}, which writes JSON documents from a {@link PCollection
  * PCollection&lt;String&gt;} (which can be bounded or unbounded).
  *
+ * <p>{@link ElasticsearchIO#write ElasticsearchIO.write()} involves 2 discrete steps:
+ *
+ * <ul>
+ *   <li>Converting the input PCollection of valid ES documents into Bulk API directives i.e. Should
+ *       the input document result in: update, insert, delete, with version, with routing, etc (See
+ *       {@link ElasticsearchIO.DocToBulk})
+ *   <li>Batching Bulk API directives together and interfacing with an Elasticsearch cluster. (See
+ *       {@link ElasticsearchIO.BulkIO})
+ * </ul>
+ *
+ * <p>In most cases, using {@link ElasticsearchIO#write} will be desirable. In some cases, one may
+ * want to use {@link ElasticsearchIO.DocToBulk} and {@link ElasticsearchIO.BulkIO} directly. Such
+ * cases might include:
+ *
+ * <ul>
+ *   <li>Unit testing. Ensure that output Bulk API entities for a given set of inputs will produce
+ *       an expected result, without the need for an available Elasticsearch cluster. See
+ *       {@link ElasticsearchIO.Write#docToBulk}
+ *   <li>Flexible options for data backup. Serialized Bulk API entities can be forked and sent to
+ *       both Elasticsearch and a data lake.
+ *   <li>Mirroring data to multiple clusters. Presently, mirroring data to multiple clusters would
+ *       require duplicate computation.
+ *   <li>Better batching with input streams in one job. A job may produce multiple "shapes" of Bulk
+ *       API directives based on multiple input types, and then "fan-in" all serialized Bulk
+ *       directives into a single BulkIO transform to improve batching semantics.
+ *   <li>Decoupled jobs. Job(s) could be made to produce Bulk directives and then publish them to a
+ *       message bus. A distinct job could consume from that message bus and solely be responsible
+ *       for IO with the target cluster(s).
+ * </ul>
+ *
+ * <p>Note that configurations options for {@link ElasticsearchIO.Write} are a union of
+ * configutation options for {@link ElasticsearchIO.DocToBulk} and {@link ElasticsearchIO.BulkIO}.
+ *
  * <p>To configure {@link ElasticsearchIO#write ElasticsearchIO.write()}, similar to the read, you
  * have to provide a connection configuration. For instance:
  *
