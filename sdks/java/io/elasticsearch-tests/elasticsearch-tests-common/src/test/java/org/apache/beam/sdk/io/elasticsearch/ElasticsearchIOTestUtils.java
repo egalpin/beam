@@ -146,7 +146,7 @@ class ElasticsearchIOTestUtils {
     insertTestDocuments(connectionConfiguration, data, restClient);
   }
 
-  static void refreshAllIndices(RestClient restClient) throws IOException{
+  static void refreshAllIndices(RestClient restClient) throws IOException {
     Request request = new Request("POST", "/_refresh");
     restClient.performRequest(request);
   }
@@ -302,8 +302,7 @@ class ElasticsearchIOTestUtils {
    * @param type Optional Elasticsearch type
    * @return The _search endpoint for the provided settings.
    */
-  static String generateSearchPath(
-      @Nullable String index, @Nullable String type) {
+  static String generateSearchPath(@Nullable String index, @Nullable String type) {
     StringBuilder sb = new StringBuilder();
     if (index != null) {
       sb.append("/").append(index);
@@ -323,8 +322,7 @@ class ElasticsearchIOTestUtils {
    * @param connectionConfiguration Specifies the index and type
    * @return The _search endpoint for the provided settings.
    */
-  static String generateSearchPath(
-      ConnectionConfiguration connectionConfiguration) {
+  static String generateSearchPath(ConnectionConfiguration connectionConfiguration) {
     return generateSearchPath(
         connectionConfiguration.getIndex(), connectionConfiguration.getType());
   }

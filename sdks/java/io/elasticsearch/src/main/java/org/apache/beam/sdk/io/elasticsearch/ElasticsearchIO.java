@@ -147,8 +147,8 @@ import org.slf4j.LoggerFactory;
  *
  * <ul>
  *   <li>Unit testing. Ensure that output Bulk API entities for a given set of inputs will produce
- *       an expected result, without the need for an available Elasticsearch cluster. See
- *       {@link ElasticsearchIO.Write#docToBulk}
+ *       an expected result, without the need for an available Elasticsearch cluster. See {@link
+ *       ElasticsearchIO.Write#docToBulk}
  *   <li>Flexible options for data backup. Serialized Bulk API entities can be forked and sent to
  *       both Elasticsearch and a data lake.
  *   <li>Mirroring data to multiple clusters. Presently, mirroring data to multiple clusters would
@@ -1470,7 +1470,10 @@ public class ElasticsearchIO {
         throws IOException {
       String documentMetadata = "{}";
       boolean isDelete = false;
-      if (spec.getIndexFn() != null || spec.getTypeFn() != null || spec.getIdFn() != null) {
+      if (spec.getIndexFn() != null
+          || spec.getTypeFn() != null
+          || spec.getIdFn() != null
+          || spec.getRoutingFn() != null) {
         // parse once and reused for efficiency
         JsonNode parsedDocument = OBJECT_MAPPER.readTree(document);
         documentMetadata = getDocumentMetadata(spec, parsedDocument, backendVersion);
