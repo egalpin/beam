@@ -138,9 +138,9 @@ public class ElasticsearchIOIT {
   }
 
   @Test
-  public void testWriteWithFullAddressingAndRouting() throws Exception {
+  public void testWriteWithRouting() throws Exception {
     elasticsearchIOTestCommon.setPipeline(pipeline);
-    elasticsearchIOTestCommon.testWriteWithFullAddressingAndRouting();
+    elasticsearchIOTestCommon.testWriteWithRouting();
   }
 
   @Test

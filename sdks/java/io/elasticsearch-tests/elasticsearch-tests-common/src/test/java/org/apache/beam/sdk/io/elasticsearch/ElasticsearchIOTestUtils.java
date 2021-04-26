@@ -28,11 +28,9 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
-import java.util.Map.Entry;
-import javafx.util.Pair;
+import org.apache.beam.sdk.values.KV;
 import org.apache.http.HttpEntity;
 import org.apache.http.entity.ContentType;
 import org.apache.http.nio.entity.NStringEntity;
@@ -148,6 +146,11 @@ class ElasticsearchIOTestUtils {
     insertTestDocuments(connectionConfiguration, data, restClient);
   }
 
+  static void refreshAllIndices(RestClient restClient) throws IOException{
+    Request request = new Request("POST", "/_refresh");
+    restClient.performRequest(request);
+  }
+
   /**
    * Forces a refresh of the given index to make recently inserted documents available for search
    * using the index and type named in the connectionConfiguration.
@@ -213,12 +216,13 @@ class ElasticsearchIOTestUtils {
       throws IOException {
     long result = 0;
     try {
-      String endPoint = String.format("/%s/_refresh", index);
-      Request request = new Request("POST", endPoint);
-      restClient.performRequest(request);
+      refreshAllIndices(restClient);
 
-      endPoint = generateSearchPath(index, type, urlParams);
-      request = new Request("GET", endPoint);
+      String endPoint = generateSearchPath(index, type);
+      Request request = new Request("GET", endPoint);
+      if (urlParams != null) {
+        request.addParameters(urlParams);
+      }
       Response response = restClient.performRequest(request);
       JsonNode searchResult = ElasticsearchIO.parseResponse(response.getEntity());
       if (backendVersion >= 7) {
@@ -296,11 +300,10 @@ class ElasticsearchIOTestUtils {
    *
    * @param index Optional Elasticsearch index
    * @param type Optional Elasticsearch type
-   * @param urlParams Optional key/value pairs describing URL params for ES APIs
    * @return The _search endpoint for the provided settings.
    */
   static String generateSearchPath(
-      @Nullable String index, @Nullable String type, @Nullable Map<String, String> urlParams) {
+      @Nullable String index, @Nullable String type) {
     StringBuilder sb = new StringBuilder();
     if (index != null) {
       sb.append("/").append(index);
@@ -311,18 +314,6 @@ class ElasticsearchIOTestUtils {
 
     sb.append("/_search");
 
-    if (urlParams != null) {
-      sb.append("?");
-      Iterator<Entry<String, String>> paramIterator = urlParams.entrySet().iterator();
-      while (paramIterator.hasNext()) {
-        Map.Entry<String, String> param = paramIterator.next();
-        sb.append(param.getKey()).append("=").append(urlParams.get(param.getKey()));
-        if (paramIterator.hasNext()) {
-          sb.append("&");
-        }
-      }
-    }
-
     return sb.toString();
   }
 
@@ -330,13 +321,12 @@ class ElasticsearchIOTestUtils {
    * Creates a _search API path depending on ConnectionConfiguration and url params.
    *
    * @param connectionConfiguration Specifies the index and type
-   * @param urlParams Optional key/value pairs describing URL params for ES APIs
    * @return The _search endpoint for the provided settings.
    */
   static String generateSearchPath(
-      ConnectionConfiguration connectionConfiguration, @Nullable Map<String, String> urlParams) {
+      ConnectionConfiguration connectionConfiguration) {
     return generateSearchPath(
-        connectionConfiguration.getIndex(), connectionConfiguration.getType(), urlParams);
+        connectionConfiguration.getIndex(), connectionConfiguration.getType());
   }
 
   /**
@@ -357,7 +347,7 @@ class ElasticsearchIOTestUtils {
       String field,
       String value,
       @Nullable Map<String, String> urlParams,
-      @Nullable Pair<Integer, Long> versionNumberCountPair)
+      @Nullable KV<Integer, Long> versionNumberCountPair)
       throws IOException {
     String size =
         versionNumberCountPair == null ? "10" : versionNumberCountPair.getValue().toString();
@@ -376,14 +366,18 @@ class ElasticsearchIOTestUtils {
             + "  }}\n"
             + "}\n";
 
-    String endPoint = generateSearchPath(connectionConfiguration, urlParams);
+    String endPoint = generateSearchPath(connectionConfiguration);
     HttpEntity httpEntity = new NStringEntity(requestBody, ContentType.APPLICATION_JSON);
 
     Request request = new Request("GET", endPoint);
-    request.addParameters(Collections.emptyMap());
     request.setEntity(httpEntity);
+    if (urlParams != null) {
+      request.addParameters(urlParams);
+    }
+
     Response response = restClient.performRequest(request);
     JsonNode searchResult = parseResponse(response.getEntity());
+
     if (versionNumberCountPair != null) {
       int numHits = 0;
       for (JsonNode hit : searchResult.path("hits").path("hits")) {

@@ -31,6 +31,7 @@ import static org.apache.beam.sdk.io.elasticsearch.ElasticsearchIOTestUtils.SCRI
 import static org.apache.beam.sdk.io.elasticsearch.ElasticsearchIOTestUtils.countByMatch;
 import static org.apache.beam.sdk.io.elasticsearch.ElasticsearchIOTestUtils.countByScientistName;
 import static org.apache.beam.sdk.io.elasticsearch.ElasticsearchIOTestUtils.insertTestDocuments;
+import static org.apache.beam.sdk.io.elasticsearch.ElasticsearchIOTestUtils.refreshAllIndices;
 import static org.apache.beam.sdk.io.elasticsearch.ElasticsearchIOTestUtils.refreshIndexAndGetCurrentNumDocs;
 import static org.apache.beam.sdk.testing.SourceTestUtils.readFromSource;
 import static org.hamcrest.MatcherAssert.assertThat;
@@ -53,7 +54,6 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.function.BiFunction;
-import javafx.util.Pair;
 import org.apache.beam.sdk.io.BoundedSource;
 import org.apache.beam.sdk.io.elasticsearch.ElasticsearchIO.RetryConfiguration.DefaultRetryPredicate;
 import org.apache.beam.sdk.io.elasticsearch.ElasticsearchIO.RetryConfiguration.RetryPredicate;
@@ -67,6 +67,7 @@ import org.apache.beam.sdk.transforms.Count;
 import org.apache.beam.sdk.transforms.Create;
 import org.apache.beam.sdk.transforms.DoFnTester;
 import org.apache.beam.sdk.transforms.SerializableFunction;
+import org.apache.beam.sdk.values.KV;
 import org.apache.beam.sdk.values.PCollection;
 import org.apache.http.HttpEntity;
 import org.apache.http.entity.ContentType;
@@ -604,7 +605,7 @@ class ElasticsearchIOTestCommon implements Serializable {
    * document IDs by Elasticsearch. The scientist name is used for the index, type and document ID.
    * As a result there should be only a single document in each index/type.
    */
-  void testWriteWithFullAddressingAndRouting() throws Exception {
+  void testWriteWithRouting() throws Exception {
     List<String> data =
         ElasticsearchIOTestUtils.createDocuments(
             numDocs, ElasticsearchIOTestUtils.InjectionMode.DO_NOT_INJECT_INVALID_DOCS);
@@ -613,23 +614,16 @@ class ElasticsearchIOTestCommon implements Serializable {
         .apply(
             ElasticsearchIO.write()
                 .withConnectionConfiguration(connectionConfiguration)
-                .withIdFn(new ExtractValueFn("id"))
-                .withRoutingFn(new ExtractValueFn("scientist"))
-                .withIndexFn(new ExtractValueFn("scientist"))
-                .withTypeFn(new Modulo2ValueFn("scientist")));
+                .withRoutingFn(new ExtractValueFn("scientist")));
     pipeline.run();
 
+    refreshAllIndices(restClient);
     for (String scientist : FAMOUS_SCIENTISTS) {
-      String index = scientist.toLowerCase();
-      Map<String, String> routing = Collections.singletonMap("routing", scientist);
+      Map<String, String> urlParams = Collections.singletonMap("routing", scientist);
 
-      for (int i = 0; i < 2; i++) {
-        String type = "TYPE_" + scientist.hashCode() % 2;
-        long count =
-            refreshIndexAndGetCurrentNumDocs(
-                restClient, index, type, getBackendVersion(connectionConfiguration), routing);
-        assertEquals("Incorrect count for " + index + "/" + type, numDocs / NUM_SCIENTISTS, count);
-      }
+      assertEquals(
+          numDocs / NUM_SCIENTISTS,
+          countByScientistName(connectionConfiguration, restClient, scientist, urlParams));
     }
   }
 
@@ -696,7 +690,7 @@ class ElasticsearchIOTestCommon implements Serializable {
     assertEquals(
         numDocs,
         countByMatch(
-            connectionConfiguration, restClient, "my_version", "1", null, new Pair<>(1, numDocs)));
+            connectionConfiguration, restClient, "my_version", "1", null, KV.of(1, numDocs)));
 
     Write write =
         ElasticsearchIO.write()
@@ -724,11 +718,11 @@ class ElasticsearchIOTestCommon implements Serializable {
     assertEquals(
         0,
         countByMatch(
-            connectionConfiguration, restClient, "my_version", "1", null, new Pair<>(1, numDocs)));
+            connectionConfiguration, restClient, "my_version", "1", null, KV.of(1, numDocs)));
     assertEquals(
         numDocs,
         countByMatch(
-            connectionConfiguration, restClient, "my_version", "3", null, new Pair<>(3, numDocs)));
+            connectionConfiguration, restClient, "my_version", "3", null, KV.of(3, numDocs)));
   }
 
   /**
