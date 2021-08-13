@@ -133,6 +133,18 @@ public class ElasticsearchIOTest implements Serializable {
   }
 
   @Test
+  public void testWriteWithErrorsReturned() throws Exception {
+    elasticsearchIOTestCommon.setPipeline(pipeline);
+    elasticsearchIOTestCommon.testWriteWithErrorsReturned();
+  }
+
+  @Test
+  public void testWriteWithErrorsReturnedAllowedErrors() throws Exception {
+    elasticsearchIOTestCommon.setPipeline(pipeline);
+    elasticsearchIOTestCommon.testWriteWithErrorsReturnedAllowedErrors();
+  }
+
+  @Test
   public void testWriteWithMaxBatchSize() throws Exception {
     elasticsearchIOTestCommon.testWriteWithMaxBatchSize();
   }

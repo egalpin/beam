@@ -142,6 +142,18 @@ public class ElasticsearchIOIT {
   }
 
   @Test
+  public void testWriteWithErrorsReturned() throws Exception {
+    elasticsearchIOTestCommon.setPipeline(pipeline);
+    elasticsearchIOTestCommon.testWriteWithErrorsReturned();
+  }
+
+  @Test
+  public void testWriteWithErrorsReturnedAllowedErrors() throws Exception {
+    elasticsearchIOTestCommon.setPipeline(pipeline);
+    elasticsearchIOTestCommon.testWriteWithErrorsReturnedAllowedErrors();
+  }
+
+  @Test
   public void testWriteWithRouting() throws Exception {
     elasticsearchIOTestCommon.setPipeline(pipeline);
     elasticsearchIOTestCommon.testWriteWithRouting();
