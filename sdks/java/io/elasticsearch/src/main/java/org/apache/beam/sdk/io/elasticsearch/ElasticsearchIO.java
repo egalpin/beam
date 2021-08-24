@@ -1705,11 +1705,11 @@ public class ElasticsearchIO {
   @DefaultCoder(WriteSummaryCoder.class)
   @AutoValue
   public abstract static class WriteSummary implements Serializable {
-    public abstract Boolean getHasError();
-
     public abstract @Nullable String getInputDoc();
 
     public abstract @Nullable String getBulkDirective();
+
+    public abstract Boolean getHasError();
 
     public abstract @Nullable String getResponseItemJson();
 
@@ -1719,11 +1719,11 @@ public class ElasticsearchIO {
 
     @AutoValue.Builder
     abstract static class Builder {
-      abstract Builder setHasError(boolean hasError);
-
       abstract Builder setInputDoc(String inputDoc);
 
       abstract Builder setBulkDirective(String bulkDirective);
+
+      abstract Builder setHasError(boolean hasError);
 
       abstract Builder setResponseItemJson(String responseItemJson);
 
@@ -1736,22 +1736,64 @@ public class ElasticsearchIO {
       return new AutoValue_ElasticsearchIO_WriteSummary.Builder().setHasError(false).build();
     }
 
+    /**
+     * Sets the input document i.e. desired document that will end up in Elasticsearch for this
+     * WriteSummary object. The inputDoc will be the a document that was part of the input
+     * PCollection to either {@link Write} or {@link DocToBulk}
+     *
+     * @param inputDoc Serialized json input document destined to end up in Elasticsearch.
+     * @return WriteSummary with inputDocument set.
+     */
     public WriteSummary withInputDoc(String inputDoc) {
       return toBuilder().setInputDoc(inputDoc).build();
     }
 
-    public WriteSummary withResponseItemJson(String responseItemJson) {
-      return toBuilder().setResponseItemJson(responseItemJson).build();
-    }
-
+    /**
+     * Sets the bulk directive representation of an input document. This will be new-line separated
+     * JSON where each line is valid JSON. Typically the first line includes meta-data and
+     * instructions to Elasticsearch such as whether to overwrite a document, delete it, etc. and
+     * the second line (if present) will be the document itself. For more info please see
+     * https://www.elastic.co/guide/en/elasticsearch/reference/current/docs-bulk.html
+     *
+     * @param bulkDirective Serialized new-line delimited json bulk API information.
+     * @return WriteSummary with bulkDirective set.
+     */
     public WriteSummary withBulkDirective(String bulkDirective) {
       return toBuilder().setBulkDirective(bulkDirective).build();
     }
 
+    /**
+     * Sets the element from Elasticsearch Bulk API response "items" pertaining to this
+     * WriteSummary.
+     *
+     * @param responseItemJson The Elasticsearch Bulk API response.
+     * @return WriteSummary with Elasticsearch Bulk API response set.
+     */
+    public WriteSummary withResponseItemJson(String responseItemJson) {
+      return toBuilder().setResponseItemJson(responseItemJson).build();
+    }
+
+    /**
+     * Used to set whether or not there was an error for a given document as indicated by the
+     * response from Elasticsearch. Note that if using {@link Write#withAllowableResponseErrors}
+     * errors which are allowed will have a false value for hasError for their respective
+     * WriteSummary.
+     *
+     * @param hasError Whether or not Elasticsearch returned an error when persisting a bulk
+     *     directive.
+     * @return WriteSummary with hasError set.
+     */
     public WriteSummary withHasError(boolean hasError) {
       return toBuilder().setHasError(hasError).build();
     }
 
+    /**
+     * Sets the timestamp of the element in the PCollection, to be used in order to output
+     * WriteSummary to the same window from which the inputDoc originated.
+     *
+     * @param timestamp The timestamp with which the WriteSummary will be output.
+     * @return WriteSummary with timestamp set.
+     */
     public WriteSummary withTimestamp(Instant timestamp) {
       return toBuilder().setTimestamp(timestamp).build();
     }
@@ -2352,24 +2394,26 @@ public class ElasticsearchIO {
       @FinishBundle
       public void finishBundle(FinishBundleContext context)
           throws IOException, InterruptedException {
-        // TODO: remove ContextAdapter and Multimap in favour of MultiOutputReceiver when
-        //  https://issues.apache.org/jira/browse/BEAM-1287 is completed
         flushAndOutputResults(new FinishBundleContextAdapter<>(context));
       }
 
       private void flushAndOutputResults(ContextAdapter context)
           throws IOException, InterruptedException {
+        // TODO: remove ContextAdapter and Multimap in favour of MultiOutputReceiver when
+        //  https://issues.apache.org/jira/browse/BEAM-1287 is completed
         Multimap<BoundedWindow, WriteSummary> results = flushBatch();
         for (Entry<BoundedWindow, WriteSummary> result : results.entries()) {
           BoundedWindow outputWindow = result.getKey();
           WriteSummary outputResult = result.getValue();
+          Instant timestamp = outputResult.getTimestamp();
+          if (timestamp == null) {
+            timestamp = outputWindow.maxTimestamp();
+          }
 
           if (outputResult.getHasError()) {
-            context.output(
-                Write.FAILED_WRITES, outputResult, outputResult.getTimestamp(), outputWindow);
+            context.output(Write.FAILED_WRITES, outputResult, timestamp, outputWindow);
           } else {
-            context.output(
-                Write.SUCCESSFUL_WRITES, outputResult, outputResult.getTimestamp(), outputWindow);
+            context.output(Write.SUCCESSFUL_WRITES, outputResult, timestamp, outputWindow);
           }
         }
       }
