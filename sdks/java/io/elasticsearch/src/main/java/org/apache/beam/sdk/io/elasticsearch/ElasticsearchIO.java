@@ -2352,6 +2352,8 @@ public class ElasticsearchIO {
       @FinishBundle
       public void finishBundle(FinishBundleContext context)
           throws IOException, InterruptedException {
+        // TODO: remove ContextAdapter and Multimap in favour of MultiOutputReceiver when
+        //  https://issues.apache.org/jira/browse/BEAM-1287 is completed
         flushAndOutputResults(new FinishBundleContextAdapter<>(context));
       }
 

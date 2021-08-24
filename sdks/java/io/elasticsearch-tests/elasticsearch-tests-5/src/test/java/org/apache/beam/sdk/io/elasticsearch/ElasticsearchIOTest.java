@@ -263,4 +263,9 @@ public class ElasticsearchIOTest implements Serializable {
     elasticsearchIOTestCommon.testWriteWithIsDeletedFnWithPartialUpdates();
     elasticsearchIOTestCommon.testWriteWithIsDeletedFnWithoutPartialUpdate();
   }
+
+  @Test
+  public void testWriteSummaryCoder() throws Exception {
+    elasticsearchIOTestCommon.testWriteSummaryCoder();
+  }
 }

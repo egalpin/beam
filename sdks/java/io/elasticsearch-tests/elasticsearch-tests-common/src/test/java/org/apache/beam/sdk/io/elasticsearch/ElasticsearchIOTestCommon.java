@@ -50,6 +50,8 @@ import static org.junit.Assert.fail;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.io.IOException;
+import java.io.PipedInputStream;
+import java.io.PipedOutputStream;
 import java.io.Serializable;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -58,6 +60,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.function.BiFunction;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
@@ -66,6 +69,8 @@ import org.apache.beam.sdk.io.elasticsearch.ElasticsearchIO.BulkIO.StatefulBatch
 import org.apache.beam.sdk.io.elasticsearch.ElasticsearchIO.RetryConfiguration.DefaultRetryPredicate;
 import org.apache.beam.sdk.io.elasticsearch.ElasticsearchIO.RetryConfiguration.RetryPredicate;
 import org.apache.beam.sdk.io.elasticsearch.ElasticsearchIO.WriteSummary;
+import org.apache.beam.sdk.io.elasticsearch.ElasticsearchIO.WriteSummaryCoder;
+import org.apache.beam.sdk.io.elasticsearch.ElasticsearchIOTestUtils.InjectionMode;
 import org.apache.beam.sdk.options.PipelineOptions;
 import org.apache.beam.sdk.options.PipelineOptionsFactory;
 import org.apache.beam.sdk.options.ValueProvider;
@@ -923,6 +928,28 @@ class ElasticsearchIOTestCommon implements Serializable {
     PAssert.that(batches).satisfies(new AssertThatHasExpectedContents(0, data));
 
     pipeline.run();
+  }
+
+  void testWriteSummaryCoder() throws Exception {
+    List<String> data =
+        ElasticsearchIOTestUtils.createDocuments(numDocs, InjectionMode.DO_NOT_INJECT_INVALID_DOCS);
+
+    int randomNum = ThreadLocalRandom.current().nextInt(0, data.size() + 1);
+    Instant now = Instant.now();
+    Write write = ElasticsearchIO.write().withConnectionConfiguration(connectionConfiguration);
+    WriteSummary expected =
+        serializeDocs(write, data)
+            .get(randomNum)
+            .withTimestamp(now)
+            .withHasError(randomNum % 2 == 0);
+
+    PipedInputStream in = new PipedInputStream();
+    PipedOutputStream out = new PipedOutputStream(in);
+    WriteSummaryCoder coder = WriteSummaryCoder.of();
+    coder.encode(expected, out);
+    WriteSummary actual = coder.decode(in);
+
+    assertEquals(expected, actual);
   }
 
   private static class AssertThatHasExpectedContents
