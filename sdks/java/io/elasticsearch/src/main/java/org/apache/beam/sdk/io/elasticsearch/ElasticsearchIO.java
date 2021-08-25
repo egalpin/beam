@@ -2368,7 +2368,7 @@ public class ElasticsearchIO {
             TupleTag<WriteSummary> tag,
             WriteSummary writeSummary,
             Instant timestamp,
-            BoundedWindow _ignored) {
+            BoundedWindow ignored) {
           // Note: window is intentionally unused, but required as a param to fit the interface
           context.outputWithTimestamp(tag, writeSummary, timestamp);
         }
