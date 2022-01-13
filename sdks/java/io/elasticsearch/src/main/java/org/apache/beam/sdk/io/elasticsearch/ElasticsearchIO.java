@@ -43,7 +43,6 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
-import java.util.Iterator;
 import java.util.List;
 import java.util.ListIterator;
 import java.util.Map;
@@ -203,7 +202,7 @@ import org.slf4j.LoggerFactory;
 })
 public class ElasticsearchIO {
 
-  private static final List<Integer> VALID_CLUSTER_VERSIONS = Arrays.asList(2, 5, 6, 7);
+  private static final List<Integer> VALID_CLUSTER_VERSIONS = Arrays.asList(5, 6, 7);
   private static final List<String> VERSION_TYPES =
       Arrays.asList("internal", "external", "external_gt", "external_gte");
   private static final String VERSION_CONFLICT_ERROR = "version_conflict_engine_exception";
@@ -694,8 +693,8 @@ public class ElasticsearchIO {
      * Provide a query used while reading from Elasticsearch.
      *
      * @param query the query. See <a
-     *     href="https://www.elastic.co/guide/en/elasticsearch/reference/2.4/query-dsl.html">Query
-     *     DSL</a>
+     *     href="https://www.elastic.co/guide/en/elasticsearch/reference/current/query-dsl.html">
+     *     Query DSL</a>
      * @return a {@link PTransform} reading data from Elasticsearch.
      */
     public Read withQuery(String query) {
@@ -709,8 +708,8 @@ public class ElasticsearchIO {
      * Elasticsearch. This is useful for cases when the query must be dynamic.
      *
      * @param query the query. See <a
-     *     href="https://www.elastic.co/guide/en/elasticsearch/reference/2.4/query-dsl.html">Query
-     *     DSL</a>
+     *     href="https://www.elastic.co/guide/en/elasticsearch/reference/current/query-dsl.html">
+     *     Query DSL</a>
      * @return a {@link PTransform} reading data from Elasticsearch.
      */
     public Read withQuery(ValueProvider<String> query) {
@@ -729,7 +728,7 @@ public class ElasticsearchIO {
 
     /**
      * Provide a scroll keepalive. See <a
-     * href="https://www.elastic.co/guide/en/elasticsearch/reference/2.4/search-request-scroll.html">scroll
+     * href="https://www.elastic.co/guide/en/elasticsearch/reference/current/search-request-scroll.html">scroll
      * API</a> Default is "5m". Change this only if you get "No search context found" errors.
      *
      * @param scrollKeepalive keepalive duration of the scroll
@@ -743,7 +742,7 @@ public class ElasticsearchIO {
 
     /**
      * Provide a size for the scroll read. See <a
-     * href="https://www.elastic.co/guide/en/elasticsearch/reference/2.4/search-request-scroll.html">
+     * href="https://www.elastic.co/guide/en/elasticsearch/reference/current/search-request-scroll.html">
      * scroll API</a> Default is 100. Maximum is 10 000. If documents are small, increasing batch
      * size might improve read performance. If documents are big, you might need to decrease
      * batchSize
@@ -826,46 +825,23 @@ public class ElasticsearchIO {
       ConnectionConfiguration connectionConfiguration = spec.getConnectionConfiguration();
       this.backendVersion = getBackendVersion(connectionConfiguration);
       List<BoundedElasticsearchSource> sources = new ArrayList<>();
-      if (backendVersion == 2) {
-        // 1. We split per shard :
-        // unfortunately, Elasticsearch 2.x doesn't provide a way to do parallel reads on a single
-        // shard.So we do not use desiredBundleSize because we cannot split shards.
-        // With the slice API in ES 5.x+ we will be able to use desiredBundleSize.
-        // Basically we will just ask the slice API to return data
-        // in nbBundles = estimatedSize / desiredBundleSize chuncks.
-        // So each beam source will read around desiredBundleSize volume of data.
-
-        JsonNode statsJson = BoundedElasticsearchSource.getStats(connectionConfiguration, true);
-        JsonNode shardsJson =
-            statsJson.path("indices").path(connectionConfiguration.getIndex()).path("shards");
-
-        Iterator<Map.Entry<String, JsonNode>> shards = shardsJson.fields();
-        while (shards.hasNext()) {
-          Map.Entry<String, JsonNode> shardJson = shards.next();
-          String shardId = shardJson.getKey();
-          sources.add(
-              new BoundedElasticsearchSource(spec, shardId, null, null, null, backendVersion));
-        }
-        checkArgument(!sources.isEmpty(), "No shard found");
-      } else if (backendVersion >= 5) {
-        long indexSize = getEstimatedSizeBytes(options);
-        float nbBundlesFloat = (float) indexSize / desiredBundleSizeBytes;
-        int nbBundles = (int) Math.ceil(nbBundlesFloat);
-        // ES slice api imposes that the number of slices is <= 1024 even if it can be overloaded
-        if (nbBundles > 1024) {
-          nbBundles = 1024;
-        }
-        // split the index into nbBundles chunks of desiredBundleSizeBytes by creating
-        // nbBundles sources each reading a slice of the index
-        // (see https://goo.gl/MhtSWz)
-        // the slice API allows to split the ES shards
-        // to have bundles closer to desiredBundleSizeBytes
-        for (int i = 0; i < nbBundles; i++) {
-          long estimatedByteSizeForBundle = getEstimatedSizeBytes(options) / nbBundles;
-          sources.add(
-              new BoundedElasticsearchSource(
-                  spec, null, nbBundles, i, estimatedByteSizeForBundle, backendVersion));
-        }
+      long indexSize = getEstimatedSizeBytes(options);
+      float nbBundlesFloat = (float) indexSize / desiredBundleSizeBytes;
+      int nbBundles = (int) Math.ceil(nbBundlesFloat);
+      // ES slice api imposes that the number of slices is <= 1024 even if it can be overloaded
+      if (nbBundles > 1024) {
+        nbBundles = 1024;
+      }
+      // split the index into nbBundles chunks of desiredBundleSizeBytes by creating
+      // nbBundles sources each reading a slice of the index
+      // (see https://goo.gl/MhtSWz)
+      // the slice API allows to split the ES shards
+      // to have bundles closer to desiredBundleSizeBytes
+      for (int i = 0; i < nbBundles; i++) {
+        long estimatedByteSizeForBundle = getEstimatedSizeBytes(options) / nbBundles;
+        sources.add(
+            new BoundedElasticsearchSource(
+                spec, null, nbBundles, i, estimatedByteSizeForBundle, backendVersion));
       }
       return sources;
     }
@@ -926,10 +902,7 @@ public class ElasticsearchIO {
     static long estimateIndexSize(ConnectionConfiguration connectionConfiguration)
         throws IOException {
       // we use indices stats API to estimate size and list the shards
-      // (https://www.elastic.co/guide/en/elasticsearch/reference/2.4/indices-stats.html)
-      // as Elasticsearch 2.x doesn't not support any way to do parallel read inside a shard
-      // the estimated size bytes is not really used in the split into bundles.
-      // However, we implement this method anyway as the runners can use it.
+      // (https://www.elastic.co/guide/en/elasticsearch/reference/current/indices-stats.html)
       // NB: Elasticsearch 5.x+ now provides the slice API.
       // (https://www.elastic.co/guide/en/elasticsearch/reference/5.0/search-request-scroll.html
       // #sliced-scroll)
@@ -999,7 +972,7 @@ public class ElasticsearchIO {
       if (query == null) {
         query = "{\"query\": { \"match_all\": {} }}";
       }
-      if ((source.backendVersion >= 5) && source.numSlices != null && source.numSlices > 1) {
+      if (source.numSlices != null && source.numSlices > 1) {
         // if there is more than one slice, add the slice to the user query
         String sliceQuery =
             String.format("\"slice\": {\"id\": %s,\"max\": %s}", source.sliceId, source.numSlices);
@@ -1012,12 +985,6 @@ public class ElasticsearchIO {
               source.spec.getConnectionConfiguration().getType());
       Map<String, String> params = new HashMap<>();
       params.put("scroll", source.spec.getScrollKeepalive());
-      if (source.backendVersion == 2) {
-        params.put("size", String.valueOf(source.spec.getBatchSize()));
-        if (source.shardPreference != null) {
-          params.put("preference", "_shards:" + source.shardPreference);
-        }
-      }
       HttpEntity queryEntity = new NStringEntity(query, ContentType.APPLICATION_JSON);
       Request request = new Request("GET", endPoint);
       request.addParameters(params);
@@ -1393,9 +1360,6 @@ public class ElasticsearchIO {
      * @return the {@link DocToBulk} with the scripted updates set
      */
     public DocToBulk withUpsertScript(String source) {
-      if (getBackendVersion() == null || getBackendVersion() == 2) {
-        LOG.warn("Painless scripts are not supported on Elasticsearch clusters before version 5.0");
-      }
       return builder().setUsePartialUpdate(false).setUpsertScript(source).build();
     }
 
@@ -2046,7 +2010,8 @@ public class ElasticsearchIO {
 
     /**
      * Provide a maximum size in number of documents for the batch see bulk API
-     * (https://www.elastic.co/guide/en/elasticsearch/reference/2.4/docs-bulk.html). Default is 1000
+     * (https://www.elastic.co/guide/en/elasticsearch/reference/current/docs-bulk.html). Default is
+     * 1000
      * docs (like Elasticsearch bulk size advice). See
      * https://www.elastic.co/guide/en/elasticsearch/guide/current/bulk.html Depending on the
      * execution engine, size of bundles may vary, this sets the maximum size. Change this if you
@@ -2062,7 +2027,8 @@ public class ElasticsearchIO {
 
     /**
      * Provide a maximum size in bytes for the batch see bulk API
-     * (https://www.elastic.co/guide/en/elasticsearch/reference/2.4/docs-bulk.html). Default is 5MB
+     * (https://www.elastic.co/guide/en/elasticsearch/reference/current/docs-bulk.html). Default is
+     * 5MB
      * (like Elasticsearch bulk size advice). See
      * https://www.elastic.co/guide/en/elasticsearch/guide/current/bulk.html Depending on the
      * execution engine, size of bundles may vary, this sets the maximum size. Change this if you
@@ -2583,7 +2549,7 @@ public class ElasticsearchIO {
           VALID_CLUSTER_VERSIONS.contains(backendVersion),
           "The Elasticsearch version to connect to is %s.x. "
               + "This version of the ElasticsearchIO is only compatible with "
-              + "Elasticsearch v7.x, v6.x, v5.x and v2.x",
+              + "Elasticsearch v7.x, v6.x, v5.x",
           backendVersion);
       return backendVersion;
 
