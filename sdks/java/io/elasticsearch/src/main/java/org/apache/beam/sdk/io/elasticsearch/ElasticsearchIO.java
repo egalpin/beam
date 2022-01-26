@@ -59,6 +59,7 @@ import org.apache.beam.sdk.annotations.Experimental.Kind;
 import org.apache.beam.sdk.coders.AtomicCoder;
 import org.apache.beam.sdk.coders.BooleanCoder;
 import org.apache.beam.sdk.coders.Coder;
+import org.apache.beam.sdk.coders.CoderException;
 import org.apache.beam.sdk.coders.DefaultCoder;
 import org.apache.beam.sdk.coders.InstantCoder;
 import org.apache.beam.sdk.coders.NullableCoder;
@@ -1685,7 +1686,22 @@ public class ElasticsearchIO {
     @Override
     public Document decode(InputStream inStream) throws IOException {
       String inputDoc = NullableCoder.of(StringUtf8Coder.of()).decode(inStream);
-      String bulkDirective = NullableCoder.of(StringUtf8Coder.of()).decode(inStream);
+      // to account for transition between String and Document coders. If one string decode
+      // results in EOF then we assume that the data being decoded originated from a time where
+      // this module encoded document as String only. This is helpful for updating running
+      // pipelines where data may be held in state between updates.
+      String bulkDirective;
+      try {
+        bulkDirective = NullableCoder.of(StringUtf8Coder.of()).decode(inStream);
+      } catch (CoderException e) {
+        if (e.getMessage().contains("got -1")) {
+          // We've reached end of stream. N.B. previously encoded strings would have only been
+          // bulk directives
+          return Document.create().withBulkDirective(inputDoc);
+        } else {
+          throw e;
+        }
+      }
       boolean hasError = BooleanCoder.of().decode(inStream);
       String responseItemJson = NullableCoder.of(StringUtf8Coder.of()).decode(inStream);
       Instant timestamp = NullableCoder.of(InstantCoder.of()).decode(inStream);
