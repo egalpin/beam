@@ -557,6 +557,16 @@ public class PubsubIO {
   }
 
   /**
+   * Returns A {@link PTransform} that continuously reads from a Google Cloud Pub/Sub stream. The
+   * messages will contain a {@link PubsubMessage#getPayload() payload}, {@link
+   * PubsubMessage#getAttributeMap() attributes}, along with the {@link PubsubMessage#getMessageId()
+   * messageId} and {PubsubMessage#getOrderingKey() orderingKey} from PubSub.
+   */
+  public static Read<PubsubMessage> readMessagesWithAllAttributesAndMessageIdAndOrderingKey() {
+    return Read.newBuilder().setCoder(PubsubMessageCoder.of()).setNeedsOrderingKey(true).build();
+  }
+
+  /**
    * Returns A {@link PTransform} that continuously reads UTF-8 encoded strings from a Google Cloud
    * Pub/Sub stream.
    */
@@ -767,6 +777,8 @@ public class PubsubIO {
 
     abstract boolean getNeedsMessageId();
 
+    abstract boolean getNeedsOrderingKey();
+
     abstract Builder<T> toBuilder();
 
     static <T> Builder<T> newBuilder(SerializableFunction<PubsubMessage, T> parseFn) {
@@ -775,6 +787,7 @@ public class PubsubIO {
       builder.setPubsubClientFactory(FACTORY);
       builder.setNeedsAttributes(false);
       builder.setNeedsMessageId(false);
+      builder.setNeedsOrderingKey(false);
       return builder;
     }
 
@@ -813,6 +826,8 @@ public class PubsubIO {
       abstract Builder<T> setNeedsAttributes(boolean needsAttributes);
 
       abstract Builder<T> setNeedsMessageId(boolean needsMessageId);
+
+      abstract Builder<T> setNeedsOrderingKey(boolean needsOrderingKey);
 
       abstract Builder<T> setClock(Clock clock);
 
@@ -1021,7 +1036,8 @@ public class PubsubIO {
               getTimestampAttribute(),
               getIdAttribute(),
               getNeedsAttributes(),
-              getNeedsMessageId());
+              getNeedsMessageId(),
+              getNeedsOrderingKey());
 
       PCollection<T> read;
       PCollection<PubsubMessage> preParse = input.apply(source);
