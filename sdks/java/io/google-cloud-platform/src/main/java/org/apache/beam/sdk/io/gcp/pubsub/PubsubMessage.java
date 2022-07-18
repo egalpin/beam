@@ -40,21 +40,34 @@ public class PubsubMessage {
 
     abstract @Nullable String getMessageId();
 
+    abstract @Nullable String getOrderingKey();
+
     static Impl create(
-        byte[] payload, @Nullable Map<String, String> attributes, @Nullable String messageId) {
-      return new AutoValue_PubsubMessage_Impl(payload, attributes, messageId);
+        byte[] payload,
+        @Nullable Map<String, String> attributes,
+        @Nullable String messageId,
+        @Nullable String orderingKey) {
+      return new AutoValue_PubsubMessage_Impl(payload, attributes, messageId, orderingKey);
     }
   }
 
   private Impl impl;
 
   public PubsubMessage(byte[] payload, @Nullable Map<String, String> attributes) {
-    this(payload, attributes, null);
+    this(payload, attributes, null, null);
   }
 
   public PubsubMessage(
       byte[] payload, @Nullable Map<String, String> attributes, @Nullable String messageId) {
-    impl = Impl.create(payload, attributes, messageId);
+    impl = Impl.create(payload, attributes, messageId, null);
+  }
+
+  public PubsubMessage(
+      byte[] payload,
+      @Nullable Map<String, String> attributes,
+      @Nullable String messageId,
+      @Nullable String orderingKey) {
+    impl = Impl.create(payload, attributes, messageId, orderingKey);
   }
 
   /** Returns the main PubSub message. */
@@ -76,6 +89,10 @@ public class PubsubMessage {
   /** Returns the messageId of the message populated by Cloud Pub/Sub. */
   public @Nullable String getMessageId() {
     return impl.getMessageId();
+  }
+
+  public @Nullable String getOrderingKey() {
+    return impl.getOrderingKey();
   }
 
   @Override
