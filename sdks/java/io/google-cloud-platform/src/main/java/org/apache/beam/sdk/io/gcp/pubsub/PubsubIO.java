@@ -1142,6 +1142,8 @@ public class PubsubIO {
     /** The format function for input PubsubMessage objects. */
     abstract SerializableFunction<T, PubsubMessage> getFormatFn();
 
+    abstract @Nullable String getPubsubRootUrl();
+
     abstract Builder<T> toBuilder();
 
     static <T> Builder<T> newBuilder(SerializableFunction<T, PubsubMessage> formatFn) {
@@ -1170,6 +1172,8 @@ public class PubsubIO {
       abstract Builder<T> setIdAttribute(String idAttribute);
 
       abstract Builder<T> setFormatFn(SerializableFunction<T, PubsubMessage> formatFn);
+
+      abstract Builder<T> setPubsubRootUrl(String pubsubRootUrl);
 
       abstract Write<T> build();
     }
@@ -1250,6 +1254,10 @@ public class PubsubIO {
       return toBuilder().setIdAttribute(idAttribute).build();
     }
 
+    public Write<T> withPubsubRootUrl(String pubsubRootUrl) {
+      return toBuilder().setPubsubRootUrl(pubsubRootUrl).build();
+    }
+
     @Override
     public PDone expand(PCollection<T> input) {
       if (getTopicProvider() == null) {
@@ -1289,8 +1297,8 @@ public class PubsubIO {
                       MoreObjects.firstNonNull(
                           getMaxBatchSize(), PubsubUnboundedSink.DEFAULT_PUBLISH_BATCH_SIZE),
                       MoreObjects.firstNonNull(
-                          getMaxBatchBytesSize(),
-                          PubsubUnboundedSink.DEFAULT_PUBLISH_BATCH_BYTES)));
+                          getMaxBatchBytesSize(), PubsubUnboundedSink.DEFAULT_PUBLISH_BATCH_BYTES),
+                      getPubsubRootUrl()));
       }
       throw new RuntimeException(); // cases are exhaustive.
     }
